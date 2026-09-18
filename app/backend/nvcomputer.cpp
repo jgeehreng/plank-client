@@ -31,6 +31,7 @@
 #define SER_OUTPUTTOPOLOGY "plank-output-topology"
 #define SER_MANUALBOOKMARK "plank-manual-bookmark"
 #define SER_SERVERUUID "plank-server-uuid"
+#define SER_USERNAME "plank-username"
 
 namespace {
 QString manualBookmarkUuid(const NvAddress& address)
@@ -186,6 +187,13 @@ NvComputer::NvComputer(QSettings& settings)
     }
     this->manualBookmark = settings.value(SER_MANUALBOOKMARK, false).toBool();
     this->serverUuid = settings.value(SER_SERVERUUID).toString();
+    this->plankUsername = settings.value(SER_USERNAME).toString().trimmed();
+    this->plankUsername.remove(QChar('\0'));
+    if (this->plankUsername.contains(QLatin1Char('\n')) ||
+            this->plankUsername.contains(QLatin1Char('\r')) ||
+            this->plankUsername.size() > 256) {
+        this->plankUsername.clear();
+    }
     const QJsonDocument serializedTopology = QJsonDocument::fromJson(
             settings.value(SER_OUTPUTTOPOLOGY).toByteArray());
     if (serializedTopology.isObject()) {
@@ -245,6 +253,12 @@ void NvComputer::serialize(QSettings& settings, bool serializeApps) const
                     plankProfileBitratesKbps));
     settings.setValue(SER_MANUALBOOKMARK, manualBookmark);
     settings.setValue(SER_SERVERUUID, serverUuid);
+    settings.remove("plank-password");
+    if (plankUsername.isEmpty()) {
+        settings.remove(SER_USERNAME);
+    } else {
+        settings.setValue(SER_USERNAME, plankUsername);
+    }
     if (!outputTopology.outputs.isEmpty()) {
         settings.setValue(SER_OUTPUTTOPOLOGY,
                           QJsonDocument(outputTopology.toJson()).toJson(QJsonDocument::Compact));
@@ -283,6 +297,7 @@ bool NvComputer::isEqualSerialized(const NvComputer &that) const
                that.plankProfileBitratesKbps &&
            this->manualBookmark == that.manualBookmark &&
            this->serverUuid == that.serverUuid &&
+           this->plankUsername == that.plankUsername &&
            this->outputTopology.toJson() == that.outputTopology.toJson() &&
            this->appList == that.appList;
 }

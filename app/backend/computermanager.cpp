@@ -738,6 +738,7 @@ private:
                 QWriteLocker lock(&m_Computer->lock);
                 m_Computer->sessionToken = token;
                 m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
+                m_Computer->plankUsername = m_Username.trimmed();
                 if (topologySupported) {
                     m_Computer->outputTopology = topology;
                     qInfo() << "PLANK retained scaling mode"

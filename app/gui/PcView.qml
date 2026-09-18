@@ -348,9 +348,16 @@ CenteredGridView {
         closePolicy: Popup.CloseOnEscape
         standardButtons: Dialog.Ok | Dialog.Cancel
 
-        onOpened: usernameField.forceActiveFocus()
+        onOpened: {
+            usernameField.text = computerModel.plankUsername(pcIndex)
+            passwordField.clear()
+            if (usernameField.text) {
+                passwordField.forceActiveFocus()
+            } else {
+                usernameField.forceActiveFocus()
+            }
+        }
         onClosed: {
-            usernameField.clear()
             passwordField.clear()
         }
         onAccepted: {

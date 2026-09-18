@@ -61,6 +61,8 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
                     computer->plankHostVersion : QString();
     case ManualBookmarkRole:
         return computer->manualBookmark;
+    case UsernameRole:
+        return computer->plankUsername;
     case AddressRole:
         // New PLANK bookmarks have a durable manual address, but
         // workstation records created before bookmarks do not. Never expose
@@ -108,6 +110,7 @@ QHash<int, QByteArray> ComputerModel::roleNames() const
     names[PlankHostVersionRole] = "plankHostVersion";
     names[ManualBookmarkRole] = "manualBookmark";
     names[AddressRole] = "address";
+    names[UsernameRole] = "plankUsername";
 
     return names;
 }
@@ -315,6 +318,14 @@ void ComputerModel::authenticateComputer(int computerIndex, QString username,
     Q_ASSERT(computerIndex < m_Computers.count());
     m_ComputerManager->authenticateHost(m_Computers[computerIndex],
                                         std::move(username), std::move(password));
+}
+
+QString ComputerModel::plankUsername(int computerIndex) const
+{
+    Q_ASSERT(computerIndex >= 0 && computerIndex < m_Computers.count());
+    NvComputer* computer = m_Computers[computerIndex];
+    QReadLocker lock(&computer->lock);
+    return computer->plankUsername;
 }
 
 void ComputerModel::handleAuthenticationCompleted(NvComputer*, QString error)

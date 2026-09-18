@@ -139,6 +139,7 @@ public:
             StreamingPreferences::plankDefaultProfileBitrates();
     bool manualBookmark = false;
     QString serverUuid;
+    QString plankUsername;
     // Remember to update isEqualSerialized() when adding fields here!
 
     // Synchronization

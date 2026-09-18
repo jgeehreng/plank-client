@@ -16,7 +16,8 @@ class ComputerModel : public QAbstractListModel
         StatusUnknownRole,
         PlankHostVersionRole,
         ManualBookmarkRole,
-        AddressRole
+        AddressRole,
+        UsernameRole
     };
 
 public:
@@ -34,6 +35,8 @@ public:
     Q_INVOKABLE void deleteComputer(int computerIndex);
 
     Q_INVOKABLE void authenticateComputer(int computerIndex, QString username, QString password);
+
+    Q_INVOKABLE QString plankUsername(int computerIndex) const;
 
     Q_INVOKABLE void renameComputer(int computerIndex, QString name);
 
