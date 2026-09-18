@@ -1,7 +1,6 @@
 #include "macrawwacom.h"
 #include "macrawwacomasync.h"
 #include "macrawwacomlogic.h"
-#include "macwacomvendordriver.h"
 #include "linuxrawwacom.h" // shared device-family policy; no Linux dependencies
 #include <Limelight.h>
 #include <SDL3/SDL.h>
@@ -15,19 +14,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
-#include <cstdlib>
 #include <deque>
-#include <fcntl.h>
 #include <memory>
 #include <mutex>
-#include <spawn.h>
-#include <string>
-#include <sys/wait.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
-
-extern char **environ;
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -93,72 +84,6 @@ int errorNumber(IOReturn result)
     default: return EIO;
     }
 }
-int runTool(const char* path, const std::vector<std::string>& args)
-{
-    std::vector<char*> argv;
-    argv.reserve(args.size() + 2);
-    argv.push_back(const_cast<char*>(path));
-    for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
-    argv.push_back(nullptr);
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    pid_t pid = 0;
-    const int spawned = posix_spawn(&pid, path, &actions, nullptr, argv.data(), environ);
-    posix_spawn_file_actions_destroy(&actions);
-    if (spawned != 0) return -1;
-    int status = 0;
-    if (waitpid(pid, &status, 0) != pid) return -1;
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-std::string launchdDomain()
-{
-    return "gui/" + std::to_string(getuid());
-}
-MacWacomVendorDriver::Tools vendorDriverTools()
-{
-    MacWacomVendorDriver::Tools tools;
-    tools.domain = [] { return launchdDomain(); };
-    tools.plistExists = [](std::string_view path) {
-        return ::access(std::string(path).c_str(), R_OK) == 0;
-    };
-    tools.launchctl = [](const std::vector<std::string>& args) {
-        return runTool("/bin/launchctl", args);
-    };
-    tools.terminateProcesses = [](const std::vector<std::string>& names) {
-        for (const auto& name : names)
-            runTool("/usr/bin/killall", {"-TERM", name});
-    };
-    return tools;
-}
-MacWacomVendorDriver::Hold& vendorDriverHold()
-{
-    static MacWacomVendorDriver::Hold hold(vendorDriverTools());
-    return hold;
-}
-void pauseVendorDriver()
-{
-    auto& hold = vendorDriverHold();
-    const bool first = !hold.held();
-    static std::once_flag once;
-    std::call_once(once, [] {
-        std::atexit([] { vendorDriverHold().restore(); });
-    });
-    hold.pause();
-    if (!first) return;
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                "Mac Wacom: paused vendor driver for exclusive forwarding");
-    if (!hold.stoppedPlists().empty())
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-}
-void restoreVendorDriver()
-{
-    auto& hold = vendorDriverHold();
-    if (!hold.held()) return;
-    hold.restore();
-    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Mac Wacom: restored vendor driver");
-}
 }
 
 class MacRawWacomInput::Impl : public std::enable_shared_from_this<Impl>
@@ -202,7 +127,6 @@ public:
             if (exited) worker.join();
             else worker.detach(); // self-owned state remains until the worker exits
         }
-        if (exited) restoreVendorDriver();
         if (!released || !exited)
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Mac Wacom shutdown exceeded release deadline");
     }
@@ -375,12 +299,6 @@ private:
             success = candidates.size() <= PLANK_RAW_HID_MAX_INTERFACES;
             const auto product = number(candidates.front().device, CFSTR(kIOHIDProductIDKey));
             success &= plankWacomTransportForUsbDevice(vendor, product) == PlankWacomTransport::ExactRawHid;
-            if (success && !vendorDriverHold().held()) {
-                pauseVendorDriver();
-                if (devices) CFRelease(devices);
-                CFRelease(manager);
-                return lifecycle.canForward() && discover();
-            }
             for (const auto& candidate : candidates) {
                 if (!success) break;
                 CFTypeRef descriptor = IOHIDDeviceGetProperty(candidate.device, CFSTR(kIOHIDReportDescriptorKey));
@@ -578,7 +496,6 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         release(false);
-        restoreVendorDriver();
         lifecycle.markExited();
     }
 };

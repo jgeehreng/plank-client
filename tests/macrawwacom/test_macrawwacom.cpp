@@ -1,11 +1,7 @@
 #include <QtTest>
 #include "macrawwacomasync.h"
 #include "macrawwacomlogic.h"
-#include "macwacomvendordriver.h"
 #include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
 
 class TestMacRawWacom : public QObject {
     Q_OBJECT
@@ -19,11 +15,6 @@ private slots:
     void newerRequestsOverrideLateCompletion();
     void reconnectDoesNotRestoreLostFocus();
     void stopAndExitCannotResumeForwarding();
-    void vendorDriverAgentLabels();
-    void vendorDriverPausesExistingAgents();
-    void vendorDriverPauseIsIdempotentAndKillsLeftovers();
-    void vendorDriverDoesNotStartAgentsItDidNotStop();
-    void vendorDriverRestoresAfterFailedBootout();
 };
 
 static QByteArray frame(unsigned type, unsigned size)
@@ -237,139 +228,6 @@ void TestMacRawWacom::stopAndExitCannotResumeForwarding()
     exited.setActive(true);
     exited.finishReconnect();
     QVERIFY(!exited.canForward());
-}
-
-void TestMacRawWacom::vendorDriverAgentLabels()
-{
-    using namespace MacWacomVendorDriver;
-    QVERIFY(labelFromPlist("/Library/LaunchAgents/com.wacom.wacomtablet.plist") ==
-            "com.wacom.wacomtablet");
-    QVERIFY(labelFromPlist("com.wacom.IOManager.plist") == "com.wacom.IOManager");
-    QVERIFY(isTrackedLabel("com.wacom.wacomtablet"));
-    QVERIFY(isTrackedLabel("com.wacom.IOManager"));
-    QVERIFY(isTrackedLabel("com.wacom.DataStoreMgr"));
-    QVERIFY(!isTrackedLabel("com.wacom.UpdateHelper"));
-    QVERIFY(!isTrackedLabel("application.com.wacom.WacomTouchDriver"));
-    QVERIFY(plistForLabel("com.wacom.DataStoreMgr") ==
-            "/Library/LaunchAgents/com.wacom.DataStoreMgr.plist");
-    QVERIFY(plistForLabel("com.wacom.UpdateHelper").empty());
-}
-
-void TestMacRawWacom::vendorDriverPausesExistingAgents()
-{
-    using namespace MacWacomVendorDriver;
-    std::vector<std::vector<std::string>> launchctl;
-    std::vector<std::string> killed;
-    Tools tools;
-    tools.domain = [] { return std::string("gui/501"); };
-    tools.plistExists = [](std::string_view plist) {
-        return plist == "/Library/LaunchAgents/com.wacom.wacomtablet.plist";
-    };
-    tools.launchctl = [&](const std::vector<std::string>& args) {
-        launchctl.push_back(args);
-        return 0;
-    };
-    tools.terminateProcesses = [&](const std::vector<std::string>& names) {
-        killed.insert(killed.end(), names.begin(), names.end());
-    };
-
-    Hold hold(tools);
-    hold.pause();
-    QCOMPARE(launchctl.size(), std::size_t(1));
-    QCOMPARE(launchctl.front()[0], std::string("bootout"));
-    QCOMPARE(launchctl.front()[1], std::string("gui/501"));
-    QCOMPARE(launchctl.front()[2],
-             std::string("/Library/LaunchAgents/com.wacom.wacomtablet.plist"));
-    QCOMPARE(hold.stoppedPlists(),
-             std::vector<std::string>{"/Library/LaunchAgents/com.wacom.wacomtablet.plist"});
-    QCOMPARE(killed, std::vector<std::string>(kProcessNames.begin(), kProcessNames.end()));
-    QVERIFY(hold.held());
-
-    hold.restore();
-    QCOMPARE(launchctl.size(), std::size_t(2));
-    QCOMPARE(launchctl.back()[0], std::string("bootstrap"));
-    QCOMPARE(launchctl.back()[2],
-             std::string("/Library/LaunchAgents/com.wacom.wacomtablet.plist"));
-    QVERIFY(!hold.held());
-    QVERIFY(hold.stoppedPlists().empty());
-}
-
-void TestMacRawWacom::vendorDriverPauseIsIdempotentAndKillsLeftovers()
-{
-    using namespace MacWacomVendorDriver;
-    int bootouts = 0;
-    int kills = 0;
-    Tools tools;
-    tools.domain = [] { return std::string("gui/501"); };
-    tools.plistExists = [](std::string_view plist) {
-        return plist == "/Library/LaunchAgents/com.wacom.IOManager.plist" ||
-               plist == "/Library/LaunchAgents/com.wacom.DataStoreMgr.plist";
-    };
-    tools.launchctl = [&](const std::vector<std::string>& args) {
-        if (!args.empty() && args[0] == "bootout") ++bootouts;
-        return 0;
-    };
-    tools.terminateProcesses = [&](const std::vector<std::string>&) { ++kills; };
-
-    Hold hold(tools);
-    hold.pause();
-    QCOMPARE(bootouts, 2);
-    hold.pause();
-    QCOMPARE(bootouts, 2);
-    QCOMPARE(kills, 2);
-    QCOMPARE(hold.stoppedPlists().size(), std::size_t(2));
-    hold.restore();
-    hold.restore();
-    QVERIFY(!hold.held());
-    QCOMPARE(bootouts, 2);
-}
-
-void TestMacRawWacom::vendorDriverDoesNotStartAgentsItDidNotStop()
-{
-    using namespace MacWacomVendorDriver;
-    std::vector<std::vector<std::string>> launchctl;
-    Tools tools;
-    tools.domain = [] { return std::string("gui/501"); };
-    tools.plistExists = [](std::string_view) { return false; };
-    tools.launchctl = [&](const std::vector<std::string>& args) {
-        launchctl.push_back(args);
-        return 0;
-    };
-    tools.terminateProcesses = [](const std::vector<std::string>&) {};
-
-    Hold hold(tools);
-    hold.pause();
-    QVERIFY(hold.held());
-    QVERIFY(hold.stoppedPlists().empty());
-    hold.restore();
-    QVERIFY(launchctl.empty());
-}
-
-void TestMacRawWacom::vendorDriverRestoresAfterFailedBootout()
-{
-    using namespace MacWacomVendorDriver;
-    std::vector<std::string> restored;
-    Tools tools;
-    tools.domain = [] { return std::string("gui/501"); };
-    tools.plistExists = [](std::string_view plist) {
-        return plist == "/Library/LaunchAgents/com.wacom.wacomtablet.plist";
-    };
-    tools.launchctl = [&](const std::vector<std::string>& args) {
-        if (!args.empty() && args[0] == "bootout") return 5;
-        if (!args.empty() && args[0] == "bootstrap" && args.size() > 2)
-            restored.push_back(args[2]);
-        return 0;
-    };
-    tools.terminateProcesses = [](const std::vector<std::string>&) {};
-
-    Hold hold(tools);
-    hold.pause();
-    QVERIFY(hold.held());
-    QCOMPARE(hold.stoppedPlists(),
-             std::vector<std::string>{"/Library/LaunchAgents/com.wacom.wacomtablet.plist"});
-    hold.restore();
-    QCOMPARE(restored, std::vector<std::string>{
-        "/Library/LaunchAgents/com.wacom.wacomtablet.plist"});
 }
 QTEST_APPLESS_MAIN(TestMacRawWacom)
 #include "test_macrawwacom.moc"
