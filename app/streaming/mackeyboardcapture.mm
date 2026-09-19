@@ -262,7 +262,13 @@ void MacKeyboardCapture::requestPermissionIfNeeded(bool captureEnabled)
 {
     NSCAssert(NSThread.isMainThread, @"Keyboard permission UI is main-thread only");
     static bool prompted = false;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    static NSString *const promptedKey = @"PLANKMacAccessibilityPrompted";
+    if ([defaults boolForKey:promptedKey]) {
+        prompted = true;
+    }
     if (accessibilityPromptNeeded(captureEnabled, AXIsProcessTrusted(), prompted)) {
+        [defaults setBool:YES forKey:promptedKey];
         AXIsProcessTrustedWithOptions((CFDictionaryRef)@{(id)kAXTrustedCheckOptionPrompt: @YES});
     }
 }
