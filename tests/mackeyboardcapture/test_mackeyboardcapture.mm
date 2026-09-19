@@ -78,6 +78,11 @@ private slots:
         QVERIFY(!accessibilityPromptNeeded(false, false, prompted));
         QVERIFY(!accessibilityPromptNeeded(true, false, prompted));
     }
+    void rememberedPromptDoesNotAskAgain()
+    {
+        bool prompted = true;
+        QVERIFY(!accessibilityPromptNeeded(true, false, prompted));
+    }
 
     void commandTabAndSpaceAreQueuedOnce()
     {

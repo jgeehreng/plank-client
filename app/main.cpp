@@ -983,8 +983,10 @@ int main(int argc, char *argv[])
                 commandLineParserResult == GlobalCommandLineParser::NormalStartRequested);
 
 #ifdef Q_OS_MACOS
-    // Ask before any stream can capture the pointer. Also handle enabling the
-    // preference later in Settings, without ever prompting from a live stream.
+    // Ask once before any stream can capture the pointer. macOS 27 repeats
+    // the Device Control dialog on every launch unless we remember the ask.
+    // Enabling the preference later in Settings can still request it, never
+    // from a live stream.
     auto requestKeyboardPermission = [] {
         if (Session::get() == nullptr) {
             MacKeyboardCapture::requestPermissionIfNeeded(
