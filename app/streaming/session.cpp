@@ -4444,6 +4444,8 @@ void Session::execInternal()
                         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                     "Returning to the sign-in screen after logout");
                         m_UnexpectedTermination = false;
+                        emit displayLaunchError(
+                                    tr("You have logged out of the workstation."));
                     } else {
                         emit displayLaunchError(
                                     tr("The workstation desktop changed, but the client could not reconnect."));
