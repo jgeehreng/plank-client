@@ -191,8 +191,11 @@ public:
     // Automatic handoff/reconnect is never first use, even if local trust was
     // removed while this process was streaming.
     enum class AuthenticationIntent { ExplicitConnection, Recovery };
+    // startDesktop=false asks the Host not to start another desktop session,
+    // so a reconnect after logout returns to the sign-in screen (Uppercut).
     QString authenticate(QString username, QString password, bool* greeterConfirmed = nullptr,
-                         AuthenticationIntent intent = AuthenticationIntent::ExplicitConnection);
+                         AuthenticationIntent intent = AuthenticationIntent::ExplicitConnection,
+                         bool startDesktop = true);
     bool probeWorkerReplacement(const QString& instance, const QString& certificateSha256);
     QString workerInstance() const { return m_WorkerInstance; }
     NvOutputTopology getOutputTopology(QString* certificateSha256 = nullptr);
