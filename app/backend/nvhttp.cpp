@@ -614,7 +614,8 @@ bool NvHTTP::probeWorkerReplacement(const QString& instance, const QString& cert
                 QByteArray::fromHex(certificateSha256.toLatin1()), certificate);
 }
 
-QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed)
+QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed,
+                             bool startDesktop)
 {
     if (greeterConfirmed != nullptr) *greeterConfirmed = false;
     SecureStringGuard passwordGuard(password);
@@ -622,7 +623,10 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         throw GfeHttpResponseException(400, "Invalid PLANK authentication state");
     }
 
-    QJsonObject result = postPlankJson("start", {{"username", username}});
+    QJsonObject result = postPlankJson("start", {
+        {"username", username},
+        {"start_desktop", startDesktop},
+    });
     for (int round = 0; round < 16; ++round) {
         const QString state = result.value("state").toString();
         if (state == "authenticated") {
@@ -667,6 +671,7 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         result = postPlankJson("respond", {
             {"conversation_id", result.value("conversation_id").toString()},
             {"responses", responses},
+            {"start_desktop", startDesktop},
         });
     }
 

@@ -1248,6 +1248,7 @@ void Session::plankTransportVideoReceiveLoop()
         }
 
         m_LastPlankVideoReceived.store(SDL_GetTicks());
+        m_ReachedUserDesktop.store(true);
         frameFlow.record(ClientFrameFlowTrace::Receive,
                          (info.pts / 90000) * 1000000 + (info.pts % 90000) * 1000000 / 90000,
                          info.frame_number,
@@ -3283,6 +3284,7 @@ bool Session::beginPlankReconnect(
 
     m_Reconnecting.store(true);
     m_ReconnectGreeterConfirmed.store(false);
+    m_LogoutReturnedToLogin.store(false);
     const bool openingDesktop = m_DesktopHandoffNoticeDeadline.exchange(0) > SDL_GetTicks();
     setPlankReconnectStatus(
                 openingDesktop ? "Opening your desktop..." : "Waiting for workstation...", false);
@@ -3364,12 +3366,20 @@ bool Session::runPlankReconnect()
             if (token.isEmpty()) {
                 authenticating = true;
                 bool greeterConfirmed = false;
-                token = http.authenticate(m_PlankUsername, m_PlankPassword, &greeterConfirmed);
+                token = http.authenticate(m_PlankUsername, m_PlankPassword, &greeterConfirmed,
+                                          !m_ReachedUserDesktop.load());
                 authenticating = false;
                 {
                     QWriteLocker lock(&m_Computer->lock);
                     m_Computer->sessionToken = token;
                     m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
+                }
+                if (greeterConfirmed && m_ReachedUserDesktop.load()) {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "Authenticated Host is at the sign-in screen after logout");
+                    m_LogoutReturnedToLogin.store(true);
+                    m_ReconnectCancelled.store(true);
+                    return false;
                 }
                 if (greeterConfirmed &&
                         ((m_Computer->plankFeatureFlags & NvOutputTopology::AuthenticatedDesktopStageFeature) ||
@@ -4430,8 +4440,14 @@ void Session::execInternal()
                 }
                 if (!finishPlankReconnect(
                             reconnectSucceeded, reconnectState)) {
-                    emit displayLaunchError(
-                                tr("The workstation desktop changed, but the client could not reconnect."));
+                    if (m_LogoutReturnedToLogin.load()) {
+                        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                    "Returning to the sign-in screen after logout");
+                        m_UnexpectedTermination = false;
+                    } else {
+                        emit displayLaunchError(
+                                    tr("The workstation desktop changed, but the client could not reconnect."));
+                    }
                     goto DispatchDeferredCleanup;
                 }
                 break;

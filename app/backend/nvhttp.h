@@ -152,7 +152,8 @@ public:
     // no gate. False cancels, while the callback may wait for a local decision.
     void setRequestGate(std::function<bool(bool)> gate) { m_RequestGate = std::move(gate); }
 
-    QString authenticate(QString username, QString password, bool* greeterConfirmed = nullptr);
+    QString authenticate(QString username, QString password, bool* greeterConfirmed = nullptr,
+                         bool startDesktop = true);
     bool probeWorkerReplacement(const QString& instance, const QString& certificateSha256);
     QString workerInstance() const { return m_WorkerInstance; }
     NvOutputTopology getOutputTopology(QString* certificateSha256 = nullptr);
