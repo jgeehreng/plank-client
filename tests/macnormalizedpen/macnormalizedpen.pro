@@ -1,0 +1,9 @@
+QT += core testlib
+CONFIG += testcase console c++17
+CONFIG -= app_bundle
+TEMPLATE = app
+TARGET = macnormalizedpen
+INCLUDEPATH += ../../app/streaming/input
+macx: QMAKE_CXXFLAGS += -include arm_acle.h
+SOURCES += test_macnormalizedpen.cpp
+HEADERS += ../../app/streaming/input/macnormalizedpenlogic.h

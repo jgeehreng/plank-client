@@ -458,8 +458,9 @@ macx {
     message(VideoToolbox renderer selected)
 
     DEFINES += HAVE_MAC_RAW_WACOM
-    SOURCES += streaming/input/macrawwacom.cpp
-    HEADERS += streaming/input/macrawwacom.h streaming/input/macrawwacomlogic.h streaming/input/macrawwacomasync.h
+    SOURCES += streaming/input/macrawwacom.cpp streaming/input/macnormalizedpen.cpp
+    HEADERS += streaming/input/macrawwacom.h streaming/input/macrawwacomlogic.h streaming/input/macrawwacomasync.h \
+        streaming/input/macnormalizedpen.h streaming/input/macnormalizedpenlogic.h
     LIBS += -framework IOKit -framework CoreFoundation -framework ApplicationServices -framework Carbon
 
     SOURCES += \

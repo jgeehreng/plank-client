@@ -24,6 +24,7 @@ class MacKeyboardCapture;
 #endif
 #ifdef HAVE_MAC_RAW_WACOM
 class MacRawWacomInput;
+class MacNormalizedPen;
 #endif
 
 class SdlInputHandler
@@ -54,6 +55,8 @@ public:
                                 bool batchPendingEvents = true);
 
     void handleMouseWheelEvent(SDL_MouseWheelEvent* event);
+
+    void handlePenEvent(const SDL_Event& event);
 
     void sendText(QString& string);
 
@@ -199,6 +202,11 @@ private:
     bool sendAbsoluteMousePosition(SDL_Window* window,
                                    int windowX, int windowY,
                                    bool allowClampedPosition);
+    bool ignorePenAsMouse(unsigned mouseId) const;
+    bool mapWindowPointToNormalized(SDL_Window* window,
+                                    float windowX, float windowY,
+                                    float& nx, float& ny,
+                                    bool allowClamped) const;
 
     SDL_Window* presentationWindow(Uint32 windowId) const;
     SDL_Window* pointerPresentationWindow(SDL_Window* source,
@@ -220,6 +228,7 @@ private:
 
 #ifdef HAVE_MAC_RAW_WACOM
     std::unique_ptr<MacRawWacomInput> m_MacRawWacomInput;
+    std::unique_ptr<MacNormalizedPen> m_MacNormalizedPen;
 #endif
 
 #ifdef HAVE_LIBINPUT_TABLET

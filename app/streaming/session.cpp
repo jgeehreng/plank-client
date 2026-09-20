@@ -4845,6 +4845,16 @@ void Session::execInternal()
             }
             m_InputHandler->handleMouseWheelEvent(&event.wheel);
             break;
+        case SDL_EVENT_PEN_PROXIMITY_IN:
+        case SDL_EVENT_PEN_PROXIMITY_OUT:
+        case SDL_EVENT_PEN_DOWN:
+        case SDL_EVENT_PEN_UP:
+        case SDL_EVENT_PEN_BUTTON_DOWN:
+        case SDL_EVENT_PEN_BUTTON_UP:
+        case SDL_EVENT_PEN_MOTION:
+        case SDL_EVENT_PEN_AXIS:
+            m_InputHandler->handlePenEvent(event);
+            break;
         }
     }
 
