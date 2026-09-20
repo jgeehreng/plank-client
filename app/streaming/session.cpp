@@ -2329,11 +2329,17 @@ bool Session::configurePlankHostLayout()
         if (m_PlankCaptureSource == StreamingPreferences::PLANK_CAPTURE_SCREENCAPTUREKIT) {
             int scale = 1;
             const QString mode = NvOutputTopology::resolveMacClientDisplayMode(displays, &error, &scale);
-            if (mode.isEmpty() || NvOutputTopology::macDisplayModeSize(mode) !=
-                    authenticatedDesktopSize || authenticatedLogicalSize !=
-                    QSizeF(authenticatedDesktopSize.width() / scale, authenticatedDesktopSize.height() / scale)) {
-                emit displayLaunchError(mode.isEmpty() ? error : tr("Client displays changed during connection. Please reconnect to match the current display resolution."));
+            if (mode.isEmpty()) {
+                emit displayLaunchError(error);
                 return false;
+            }
+            if (NvOutputTopology::macDisplayModeSize(mode) != authenticatedDesktopSize ||
+                    authenticatedLogicalSize !=
+                    QSizeF(authenticatedDesktopSize.width() / scale, authenticatedDesktopSize.height() / scale)) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "PLANK Mac Match Client requested %s scale=%d; host kept %dx%d",
+                            qPrintable(mode), scale,
+                            authenticatedDesktopSize.width(), authenticatedDesktopSize.height());
             }
             m_ResolvedHostLayout = QStringLiteral("fixed");
         }

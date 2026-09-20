@@ -749,10 +749,16 @@ NvOutputTopology NvHTTP::prepareMacDisplay(const QString& mode, const QString& e
     NvOutputTopology result;
     if (!NvOutputTopology::fromJson(object, result) ||
             result.featureFlags != NvOutputTopology::FixedCaptureFlags ||
-            result.desktopWidth != size.width() || result.desktopHeight != size.height() ||
-            result.captureLogicalBounds.size() != QSizeF(size.width() / scale, size.height() / scale) ||
             result.appleEncodingMode != encodingMode) {
         throw GfeHttpResponseException(400, "Mac desktop did not reach the requested resolution");
+    }
+    if (result.desktopWidth != size.width() || result.desktopHeight != size.height() ||
+            result.captureLogicalBounds.size() != QSizeF(size.width() / scale, size.height() / scale)) {
+        // Host kept the current Aqua framebuffer (often Jump Desktop on a
+        // headless Mini). Stream that geometry instead of inventing another size.
+        qWarning() << "Mac desktop stayed" << result.desktopWidth << "x" << result.desktopHeight
+                   << "at logical" << result.captureLogicalBounds.size()
+                   << "; requested" << size << "scale" << scale << "was not applied";
     }
     return result;
 }
