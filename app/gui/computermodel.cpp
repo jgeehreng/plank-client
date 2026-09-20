@@ -56,6 +56,8 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
         return computer->authorizationState == NvComputer::AS_AUTHORIZED;
     case StatusUnknownRole:
         return computer->state == NvComputer::CS_UNKNOWN;
+    case InSessionRole:
+        return computer->state == NvComputer::CS_ONLINE && computer->plankOccupied;
     case PlankHostVersionRole:
         return computer->plankHostMetadataVersion >= 1 ?
                     computer->plankHostVersion : QString();
@@ -107,6 +109,7 @@ QHash<int, QByteArray> ComputerModel::roleNames() const
     names[OnlineRole] = "online";
     names[AuthorizedRole] = "authorized";
     names[StatusUnknownRole] = "statusUnknown";
+    names[InSessionRole] = "inSession";
     names[PlankHostVersionRole] = "plankHostVersion";
     names[ManualBookmarkRole] = "manualBookmark";
     names[AddressRole] = "address";

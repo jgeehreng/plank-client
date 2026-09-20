@@ -120,6 +120,10 @@ public:
     int
     getCurrentGame(QString serverInfo);
 
+    static
+    bool
+    getPlankOccupied(QString serverInfo);
+
     QString
     getServerInfo(NvLogLevel logLevel, bool fastFail = false);
 

@@ -127,7 +127,7 @@ CenteredGridView {
         width: pcGrid.cellWidth
         height: 76
         grid: pcGrid
-        Accessible.name: model.name
+        Accessible.name: model.inSession ? qsTr("%1, in session").arg(model.name) : model.name
         hoverEnabled: true
 
         background: Rectangle {
@@ -207,9 +207,11 @@ CenteredGridView {
             Label {
                 width: parent.width
                 text: model.statusUnknown ? qsTr("Checking") :
-                      (model.online ? qsTr("Online") : qsTr("Offline"))
+                      !model.online ? qsTr("Offline") :
+                      model.inSession ? qsTr("In Session") : qsTr("Online")
                 color: model.statusUnknown ? theme.textSecondary :
-                       (model.online ? theme.success : theme.textDisabled)
+                       !model.online ? theme.textDisabled :
+                       model.inSession ? theme.danger : theme.success
                 font.pointSize: 11
                 font.weight: Font.DemiBold
                 horizontalAlignment: Text.AlignRight
@@ -232,7 +234,9 @@ CenteredGridView {
             sourceComponent: NavigableMenu {
                 id: pcContextMenu
                 MenuItem {
-                    text: qsTr("PC Status: %1").arg(model.online ? qsTr("Online") : qsTr("Offline"))
+                    text: qsTr("PC Status: %1").arg(model.statusUnknown ? qsTr("Checking") :
+                          !model.online ? qsTr("Offline") :
+                          model.inSession ? qsTr("In Session") : qsTr("Online"))
                     font.bold: true
                     enabled: false
                 }

@@ -109,6 +109,7 @@ public:
     AuthorizationState authorizationState;
     NvAddress activeAddress;
     int currentGameId;
+    bool plankOccupied = false;
     QString appVersion;
     QVector<NvDisplayMode> displayModes;
     int serverCodecModeSupport;
