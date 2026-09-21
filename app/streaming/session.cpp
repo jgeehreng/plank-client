@@ -13,6 +13,7 @@
 #endif
 #include "backend/computermanager.h"
 #include "backend/nvaddress.h"
+#include "backend/nvhttp.h"
 #ifdef Q_OS_MACOS
 #include "macapplication.h"
 #endif
@@ -2872,6 +2873,151 @@ bool Session::startConnectionAsync(bool reconnecting,
                           acceptedEncoderBackend,
                           acceptedEncodingMode);
         };
+        const auto transientDisplayWorkerDrop = [](const QtNetworkReplyException& error) {
+            switch (error.getError()) {
+            case QNetworkReply::ConnectionRefusedError:
+            case QNetworkReply::RemoteHostClosedError:
+            case QNetworkReply::TimeoutError:
+            case QNetworkReply::TemporaryNetworkFailureError:
+            case QNetworkReply::NetworkSessionFailedError:
+            case QNetworkReply::UnknownNetworkError:
+                return true;
+            default:
+                return false;
+            }
+        };
+        const auto waitForReplacementWorkerAndLaunch = [&]() -> bool {
+            constexpr int RetryIntervalMs = 500;
+            constexpr int MaximumWaitMs = 45000;
+            constexpr int CancellationPollMs = 50;
+            bool started = false;
+
+            m_WaitingForSessionCleanup.store(true);
+            emit sessionCleanupWaitChanged(
+                        true,
+                        tr("Applying workstation display layout..."));
+            qInfo() << "PLANK host display transition started; waiting up to"
+                    << MaximumWaitMs << "ms";
+            bool authenticationRefreshRequired = false;
+
+            for (int elapsedMs = 0;
+                 elapsedMs < MaximumWaitMs && !started;
+                 elapsedMs += RetryIntervalMs) {
+                for (int delayMs = 0;
+                     delayMs < RetryIntervalMs;
+                     delayMs += CancellationPollMs) {
+                    if (m_ConnectionStartCancelled.load()) break;
+                    SDL_Delay(CancellationPollMs);
+                }
+                if (m_ConnectionStartCancelled.load()) break;
+
+                if (authenticationRefreshRequired) {
+                    try {
+                        {
+                            QWriteLocker lock(&m_Computer->lock);
+                            m_Computer->sessionToken.fill(QChar('\0'));
+                            m_Computer->sessionToken.clear();
+                            m_Computer->authorizationState = NvComputer::AS_UNAUTHORIZED;
+                            m_Computer->currentGameId = 0;
+                        }
+                        http = std::make_unique<NvHTTP>(m_Computer);
+                        if (reconnecting) http->setRequestGate([this](bool auth) { return waitForPlankReconnectRequest(auth); });
+                        const QString token = http->authenticate(
+                                    m_PlankUsername,
+                                    m_PlankPassword);
+                        {
+                            QWriteLocker lock(&m_Computer->lock);
+                            m_Computer->sessionToken = token;
+                            m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
+                        }
+                        authenticationRefreshRequired = false;
+                        qInfo() << "PLANK authenticated to the replacement display worker";
+                    } catch (const GfeHttpResponseException& retryError) {
+                        if (reconnecting && PlankReconnectPolicy::terminalStatus(retryError.getStatusCode(), true))
+                            m_ReconnectCancelled.store(true);
+                        throw;
+                    } catch (const QtNetworkReplyException& retryError) {
+                        if (retryError.getError() == QNetworkReply::SslHandshakeFailedError) throw;
+                        qInfo() << "PLANK replacement display worker is not ready for authentication:"
+                                << retryError.toQString();
+                        continue;
+                    }
+                }
+
+                try {
+                    const NvOutputTopology topology = http->getOutputTopology();
+                    {
+                        QWriteLocker lock(&m_Computer->lock);
+                        m_Computer->outputTopology = topology;
+                    }
+                    if (m_ComputerManager != nullptr) {
+                        m_ComputerManager->clientSideAttributeUpdated(m_Computer);
+                    }
+                    if (!configurePlankLaunchGeometry()) {
+                        m_WaitingForSessionCleanup.store(false);
+                        emit sessionCleanupWaitChanged(false, QString());
+                        return false;
+                    }
+                    // Skip-GDM brings the worker back on the current desktop
+                    // (often a leftover 4096x2160) before any launch can apply
+                    // the requested 3840x2160. Waiting for an exact mode match
+                    // deadlocks: the Host will not change until /launch.
+                    if (!topology.matchesRequestedHostLayout(
+                                m_ResolvedHostLayout,
+                                m_ResolvedVirtualModes)) {
+                        qInfo() << "PLANK display worker is up on"
+                                << topology.layoutKind << topology.virtualModes
+                                << "; launching to apply"
+                                << m_ResolvedHostLayout << m_ResolvedVirtualModes;
+                    }
+                    startApp();
+                    started = true;
+                } catch (const GfeHttpResponseException& retryError) {
+                    if (retryError.getStatusCode() == 423) {
+                        m_WaitingForSessionCleanup.store(false);
+                        emit sessionCleanupWaitChanged(false, QString());
+                        throw;
+                    }
+                    if (retryError.getStatusCode() == 401) {
+                        if (m_PlankUsername.isEmpty() || m_PlankPassword.isEmpty()) {
+                            throw;
+                        }
+                        authenticationRefreshRequired = true;
+                        qInfo() << "PLANK display worker changed; authentication will be refreshed once";
+                        continue;
+                    }
+                    if (retryError.getStatusCode() != 409 &&
+                            retryError.getStatusCode() != 425 &&
+                            retryError.getStatusCode() != 503) {
+                        m_WaitingForSessionCleanup.store(false);
+                        emit sessionCleanupWaitChanged(false, QString());
+                        throw;
+                    }
+                    qInfo() << "PLANK display transition wait attempt failed:"
+                            << retryError.toQString();
+                } catch (const QtNetworkReplyException& retryError) {
+                    if (retryError.getError() == QNetworkReply::SslHandshakeFailedError) throw;
+                    qInfo() << "PLANK display transition worker is not ready:"
+                            << retryError.toQString();
+                }
+            }
+
+            m_WaitingForSessionCleanup.store(false);
+            emit sessionCleanupWaitChanged(false, QString());
+            if (!started && m_ConnectionStartCancelled.load()) {
+                qInfo() << "PLANK connection cancelled during display transition";
+                return false;
+            }
+            if (!started) {
+                if (!reconnecting) {
+                    emit displayLaunchError(
+                                tr("The workstation display layout did not become ready within 45 seconds."));
+                }
+                return false;
+            }
+            qInfo() << "PLANK display transition completed; launch succeeded";
+            return true;
+        };
         try {
             startApp();
         } catch (const GfeHttpResponseException& e) {
@@ -2891,131 +3037,9 @@ bool Session::startConnectionAsync(bool reconnecting,
                     QString::fromUtf8(e.getStatusMessage()) ==
                         QStringLiteral("PLANK workstation session is active");
             if (displayTransitionStarted) {
-                constexpr int RetryIntervalMs = 500;
-                constexpr int MaximumWaitMs = 45000;
-                constexpr int CancellationPollMs = 50;
-                bool started = false;
-
-                if (m_PlankUsername.isEmpty() ||
-                        m_PlankPassword.isEmpty()) {
-                    throw;
-                }
-                m_WaitingForSessionCleanup.store(true);
-                emit sessionCleanupWaitChanged(
-                            true,
-                            tr("Applying workstation display layout..."));
-                qInfo() << "PLANK host display transition started; waiting up to"
-                        << MaximumWaitMs << "ms";
-                bool authenticationRefreshRequired = false;
-
-                for (int elapsedMs = 0;
-                     elapsedMs < MaximumWaitMs && !started;
-                     elapsedMs += RetryIntervalMs) {
-                    for (int delayMs = 0;
-                         delayMs < RetryIntervalMs;
-                         delayMs += CancellationPollMs) {
-                        if (m_ConnectionStartCancelled.load()) break;
-                        SDL_Delay(CancellationPollMs);
-                    }
-                    if (m_ConnectionStartCancelled.load()) break;
-
-                    if (authenticationRefreshRequired) {
-                        try {
-                            {
-                                QWriteLocker lock(&m_Computer->lock);
-                                m_Computer->sessionToken.fill(QChar('\0'));
-                                m_Computer->sessionToken.clear();
-                                m_Computer->authorizationState = NvComputer::AS_UNAUTHORIZED;
-                                m_Computer->currentGameId = 0;
-                            }
-                            http = std::make_unique<NvHTTP>(m_Computer);
-                            if (reconnecting) http->setRequestGate([this](bool auth) { return waitForPlankReconnectRequest(auth); });
-                            const QString token = http->authenticate(
-                                        m_PlankUsername,
-                                        m_PlankPassword);
-                            {
-                                QWriteLocker lock(&m_Computer->lock);
-                                m_Computer->sessionToken = token;
-                                m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
-                            }
-                            authenticationRefreshRequired = false;
-                            qInfo() << "PLANK authenticated to the replacement display worker";
-                        } catch (const GfeHttpResponseException& retryError) {
-                            if (reconnecting && PlankReconnectPolicy::terminalStatus(retryError.getStatusCode(), true))
-                                m_ReconnectCancelled.store(true);
-                            throw;
-                        } catch (const QtNetworkReplyException& retryError) {
-                            if (retryError.getError() == QNetworkReply::SslHandshakeFailedError) throw;
-                            qInfo() << "PLANK replacement display worker is not ready for authentication:"
-                                    << retryError.toQString();
-                            continue;
-                        }
-                    }
-
-                    try {
-                        const NvOutputTopology topology = http->getOutputTopology();
-                        {
-                            QWriteLocker lock(&m_Computer->lock);
-                            m_Computer->outputTopology = topology;
-                        }
-                        if (m_ComputerManager != nullptr) {
-                            m_ComputerManager->clientSideAttributeUpdated(m_Computer);
-                        }
-                        if (!configurePlankLaunchGeometry()) {
-                            m_WaitingForSessionCleanup.store(false);
-                            emit sessionCleanupWaitChanged(false, QString());
-                            return false;
-                        }
-                        if (!topology.matchesRequestedHostLayout(
-                                    m_ResolvedHostLayout,
-                                    m_ResolvedVirtualModes)) {
-                            qInfo() << "PLANK display transition is still pending:"
-                                    << topology.layoutKind << topology.virtualModes;
-                            continue;
-                        }
-                        startApp();
-                        started = true;
-                    } catch (const GfeHttpResponseException& retryError) {
-                        if (retryError.getStatusCode() == 423) {
-                            m_WaitingForSessionCleanup.store(false);
-                            emit sessionCleanupWaitChanged(false, QString());
-                            throw;
-                        }
-                        if (retryError.getStatusCode() == 401) {
-                            authenticationRefreshRequired = true;
-                            qInfo() << "PLANK display worker changed; authentication will be refreshed once";
-                            continue;
-                        }
-                        if (retryError.getStatusCode() != 409 &&
-                                retryError.getStatusCode() != 425 &&
-                                retryError.getStatusCode() != 503) {
-                            m_WaitingForSessionCleanup.store(false);
-                            emit sessionCleanupWaitChanged(false, QString());
-                            throw;
-                        }
-                        qInfo() << "PLANK display transition wait attempt failed:"
-                                << retryError.toQString();
-                    } catch (const QtNetworkReplyException& retryError) {
-                        if (retryError.getError() == QNetworkReply::SslHandshakeFailedError) throw;
-                        qInfo() << "PLANK display transition worker is not ready:"
-                                << retryError.toQString();
-                    }
-                }
-
-                m_WaitingForSessionCleanup.store(false);
-                emit sessionCleanupWaitChanged(false, QString());
-                if (!started && m_ConnectionStartCancelled.load()) {
-                    qInfo() << "PLANK connection cancelled during display transition";
+                if (!waitForReplacementWorkerAndLaunch()) {
                     return false;
                 }
-                if (!started) {
-                    if (!reconnecting) {
-                        emit displayLaunchError(
-                                    tr("The workstation display layout did not become ready within 45 seconds."));
-                    }
-                    return false;
-                }
-                qInfo() << "PLANK display transition completed; launch succeeded";
             }
             else if (activeSessionConflict) {
                 if (reconnecting) {
@@ -3103,6 +3127,17 @@ bool Session::startConnectionAsync(bool reconnecting,
                         << topology.generation << m_StreamConfig.width
                         << m_StreamConfig.height;
                 startApp();
+            }
+        } catch (const QtNetworkReplyException& e) {
+            if (!m_Computer->plankAuthentication ||
+                    e.getError() == QNetworkReply::SslHandshakeFailedError ||
+                    !transientDisplayWorkerDrop(e)) {
+                throw;
+            }
+            qInfo() << "PLANK launch lost the display worker during a session start; waiting:"
+                    << e.toQString();
+            if (!waitForReplacementWorkerAndLaunch()) {
+                return false;
             }
         }
 
