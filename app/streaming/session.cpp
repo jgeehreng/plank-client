@@ -2993,7 +2993,7 @@ bool Session::startConnectionAsync(bool reconnecting,
                         emit sessionCleanupWaitChanged(false, QString());
                         throw;
                     }
-                    qInfo() << "PLANK display transition wait attempt failed:"
+                    qInfo() << "PLANK display transition is still pending:"
                             << retryError.toQString();
                 } catch (const QtNetworkReplyException& retryError) {
                     if (retryError.getError() == QNetworkReply::SslHandshakeFailedError) throw;
