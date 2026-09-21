@@ -1,18 +1,30 @@
 #include "macnormalizedpen.h"
 #include "macnormalizedpenlogic.h"
+#include "macnormalizedpennsevent.h"
 
 #include <Limelight.h>
 #include <SDL3/SDL.h>
 
 MacNormalizedPen::MacNormalizedPen(std::function<void()> tabletActivity)
     : m_Tool(MacNormalizedPenLogic::kToolPen),
-      m_TabletActivity(std::move(tabletActivity))
+      m_TabletActivity(std::move(tabletActivity)),
+      m_NativeEvents(std::make_unique<MacNormalizedPenNsEvent>())
 {
 }
 
 MacNormalizedPen::~MacNormalizedPen()
 {
     setActive(false);
+}
+
+bool MacNormalizedPen::nativeEventsActive() const
+{
+    return m_NativeEvents && m_NativeEvents->isRunning();
+}
+
+void MacNormalizedPen::setNativeMapper(MapPoint map)
+{
+    m_Map = std::move(map);
 }
 
 void MacNormalizedPen::setActive(bool active)
@@ -22,7 +34,14 @@ void MacNormalizedPen::setActive(bool active)
     }
     m_Active = active;
     if (!active) {
+        if (m_NativeEvents) {
+            m_NativeEvents->stop();
+        }
         cancel();
+        return;
+    }
+    if (m_NativeEvents && m_Map) {
+        m_NativeEvents->start(this, m_Map);
     }
 }
 
@@ -64,6 +83,13 @@ void MacNormalizedPen::send(unsigned char type, float x, float y)
 
 void MacNormalizedPen::handleProximity(bool entered)
 {
+    handleProximity(entered, m_Tool == MacNormalizedPenLogic::kToolEraser);
+}
+
+void MacNormalizedPen::handleProximity(bool entered, bool eraser)
+{
+    m_Tool = eraser ? MacNormalizedPenLogic::kToolEraser
+                    : MacNormalizedPenLogic::kToolPen;
     if (entered) {
         m_Near = true;
         send(MacNormalizedPenLogic::kHover, m_X, m_Y);
@@ -74,6 +100,26 @@ void MacNormalizedPen::handleProximity(bool entered)
     m_TipDown = false;
     m_Buttons = 0;
     m_Pressure = 0.0f;
+}
+
+void MacNormalizedPen::handleNativePoint(bool eraser, bool tipDown, float pressure,
+                                         float x, float y)
+{
+    if (!m_Active) {
+        return;
+    }
+    m_Tool = eraser ? MacNormalizedPenLogic::kToolEraser
+                    : MacNormalizedPenLogic::kToolPen;
+    if (!m_Near) {
+        handleProximity(true, eraser);
+    }
+    m_Pressure = MacNormalizedPenLogic::clamp01(pressure);
+    if (tipDown != m_TipDown) {
+        handleTip(tipDown, eraser, x, y);
+        return;
+    }
+    m_Near = true;
+    send(MacNormalizedPenLogic::motionEvent(tipDown), x, y);
 }
 
 void MacNormalizedPen::handleTip(bool down, bool eraser)

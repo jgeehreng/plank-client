@@ -36,6 +36,7 @@ void TestMacNormalizedPen::mapsMotionAndMouseId()
     QCOMPARE(motionEvent(false), kHover);
     QCOMPARE(motionEvent(true), kMove);
     QVERIFY(isPenMouse(static_cast<unsigned>(-2)));
+    QVERIFY(isPenMouse(static_cast<unsigned>(-1)));
     QVERIFY(!isPenMouse(0));
 }
 

@@ -80,7 +80,9 @@ inline unsigned char motionEvent(bool tipDown)
 
 inline bool isPenMouse(unsigned mouseId)
 {
-    return mouseId == static_cast<unsigned>(-2);
+    // SDL_PEN_MOUSEID is (MouseID)-2; SDL_TOUCH_MOUSEID is (MouseID)-1.
+    return mouseId == static_cast<unsigned>(-2) ||
+            mouseId == static_cast<unsigned>(-1);
 }
 
 } // namespace MacNormalizedPenLogic

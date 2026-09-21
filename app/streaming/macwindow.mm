@@ -157,3 +157,19 @@ int MacWindow::unobscuredToolbarLeft(SDL_Window* window, int currentLeft, int to
             static_cast<int>(std::ceil(NSMinX(right) - origin)));
     }
 }
+
+void MacWindow::openInputMonitoringSettings()
+{
+    void (^open)(void) = ^{
+        NSURL* url = [NSURL URLWithString:
+            @"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"];
+        if (url != nil) {
+            [[NSWorkspace sharedWorkspace] openURL:url];
+        }
+    };
+    if ([NSThread isMainThread]) {
+        open();
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), open);
+}

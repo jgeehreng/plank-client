@@ -196,10 +196,11 @@ void SdlInputHandler::setWindow(SDL_Window *window)
         ensureWaylandTabletCursorAttached(m_Window);
     }
     else {
-        // Session accepts this only for the authenticated embedded-cursor
-        // contract. Keep the local pointer for toolbar/letterbox interaction.
-        m_MouseCursorCapturedVisibilityState = false;
-        SDL_LogInfo(SDL_LOG_CATEGORY_INPUT, "PLANK embedded host cursor enabled");
+        // Mac Host embeds the cursor in ScreenCaptureKit, but tablet
+        // proximity and a foreign framebuffer (Jump) often paint none.
+        // Keep the local pointer over video so mouse and pen stay visible.
+        m_MouseCursorCapturedVisibilityState = true;
+        SDL_LogInfo(SDL_LOG_CATEGORY_INPUT, "PLANK local cursor enabled for embedded host");
     }
 #if defined(HAVE_LIBINPUT_TABLET) || defined(HAVE_MAC_RAW_WACOM)
     const auto requestTabletCursor = [this]() {
@@ -209,18 +210,36 @@ void SdlInputHandler::setWindow(SDL_Window *window)
     };
 #endif
 #ifdef HAVE_MAC_RAW_WACOM
-    if ((LiGetHostFeatureFlags() & (LI_FF_RAW_HID_TABLET | LI_FF_RAW_HID_FOCUS_SUSPEND)) ==
+    const auto hostFlags = LiGetHostFeatureFlags();
+    const bool captureAndFocus = isCaptureActive() &&
+            (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "PLANK Mac tablet host flags 0x%x",
+                static_cast<unsigned>(hostFlags));
+    if ((hostFlags & (LI_FF_RAW_HID_TABLET | LI_FF_RAW_HID_FOCUS_SUSPEND)) ==
             (LI_FF_RAW_HID_TABLET | LI_FF_RAW_HID_FOCUS_SUSPEND)) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PLANK Mac raw HID Wacom enabled");
         m_MacRawWacomInput.reset(new MacRawWacomInput(requestTabletCursor));
-        m_MacRawWacomInput->setActive(isCaptureActive() &&
-            (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0);
+        m_MacRawWacomInput->setActive(captureAndFocus);
     }
-    else if ((LiGetHostFeatureFlags() & LI_FF_PEN_TOUCH_EVENTS) != 0) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_INPUT,
+    if ((hostFlags & LI_FF_PEN_TOUCH_EVENTS) != 0) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "PLANK Mac normalized pen enabled");
         m_MacNormalizedPen.reset(new MacNormalizedPen(requestTabletCursor));
-        m_MacNormalizedPen->setActive(isCaptureActive() &&
-            (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0);
+        m_MacNormalizedPen->setNativeMapper(
+            [this](float windowX, float windowY, float& nx, float& ny) {
+                if (m_Window == nullptr) {
+                    return false;
+                }
+                int height = 0;
+                if (!SDL_GetWindowSize(m_Window, nullptr, &height) || height <= 0) {
+                    return false;
+                }
+                return mapWindowPointToNormalized(
+                    m_Window, windowX, static_cast<float>(height) - windowY,
+                    nx, ny, true);
+            });
+        syncMacNormalizedPenActive(captureAndFocus);
     }
 #endif
 #ifdef HAVE_LIBINPUT_TABLET
@@ -281,10 +300,26 @@ void SdlInputHandler::setPresentationLayout(
     updatePointerRegionLock();
 }
 
+#ifdef HAVE_MAC_RAW_WACOM
+bool SdlInputHandler::macRawHidAttached() const
+{
+    return m_MacRawWacomInput && m_MacRawWacomInput->isAttached();
+}
+
+void SdlInputHandler::syncMacNormalizedPenActive(bool captureAndFocus)
+{
+    if (m_MacNormalizedPen) {
+        m_MacNormalizedPen->setActive(captureAndFocus && !macRawHidAttached());
+    }
+}
+#endif
+
 bool SdlInputHandler::ignorePenAsMouse(unsigned mouseId) const
 {
 #ifdef HAVE_MAC_RAW_WACOM
-    return m_MacNormalizedPen && MacNormalizedPenLogic::isPenMouse(mouseId);
+    return m_MacNormalizedPen && !macRawHidAttached() &&
+            (m_MacNormalizedPen->isNear() ||
+             MacNormalizedPenLogic::isPenMouse(mouseId));
 #else
     (void)mouseId;
     return false;
@@ -327,7 +362,14 @@ bool SdlInputHandler::mapWindowPointToNormalized(
 void SdlInputHandler::handlePenEvent(const SDL_Event& event)
 {
 #ifdef HAVE_MAC_RAW_WACOM
+    if (macRawHidAttached()) {
+        syncMacNormalizedPenActive(false);
+        return;
+    }
     if (!m_MacNormalizedPen || !isCaptureActive()) {
+        return;
+    }
+    if (m_MacNormalizedPen->nativeEventsActive()) {
         return;
     }
     float x = 0.0f;
@@ -376,6 +418,9 @@ void SdlInputHandler::handlePenEvent(const SDL_Event& event)
     bool mapped = false;
     if (hasPoint) {
         SDL_Window* window = presentationWindow(windowId);
+        if (window == nullptr) {
+            window = m_Window;
+        }
         mapped = window != nullptr &&
                 mapWindowPointToNormalized(window, x, y, nx, ny, !requirePoint);
         if (!mapped && requirePoint) {
@@ -384,6 +429,11 @@ void SdlInputHandler::handlePenEvent(const SDL_Event& event)
     }
     switch (event.type) {
     case SDL_EVENT_PEN_PROXIMITY_IN:
+        if (!mapped && !m_MacNormalizedPen->isNear()) {
+            // Do not advertise a 0,0 tablet to the Host. Photoshop treats a
+            // proximity-only device as still present when it quits.
+            return;
+        }
         m_MacNormalizedPen->handleProximity(true);
         break;
     case SDL_EVENT_PEN_PROXIMITY_OUT:
@@ -708,8 +758,12 @@ void SdlInputHandler::applyPendingTabletCursorActivation()
         return;
     }
     if (!m_LocalCursorSupported) {
+        // Mac Host has no independent tablet cursor image. Hiding here
+        // leaves no pointer at all until macOS shake-to-locate.
         m_TabletCursorActivationPending.store(false);
-        if (isCaptureActive()) setCursorVisible(false);
+        if (isCaptureActive()) {
+            setCursorVisible(m_MouseCursorCapturedVisibilityState);
+        }
         return;
     }
     reconcileWaylandTabletCursorOutputs();
@@ -804,7 +858,7 @@ void SdlInputHandler::notifyFocusGained()
 #endif
 #ifdef HAVE_MAC_RAW_WACOM
     if (m_MacRawWacomInput) m_MacRawWacomInput->setActive(isCaptureActive());
-    if (m_MacNormalizedPen) m_MacNormalizedPen->setActive(isCaptureActive());
+    syncMacNormalizedPenActive(isCaptureActive());
 #endif
 #ifdef HAVE_LIBINPUT_TABLET
     if (m_LinuxWacomInput) {
@@ -980,16 +1034,13 @@ bool SdlInputHandler::isSystemKeyCaptureActive()
 void SdlInputHandler::setCaptureActive(bool active)
 {
 #ifdef HAVE_MAC_RAW_WACOM
+    SDL_Window* macFocus = SDL_GetKeyboardFocus();
+    const bool macCaptureAndFocus = active && macFocus &&
+            presentationWindow(SDL_GetWindowID(macFocus)) != nullptr;
     if (m_MacRawWacomInput) {
-        SDL_Window* focus = SDL_GetKeyboardFocus();
-        m_MacRawWacomInput->setActive(active && focus &&
-            presentationWindow(SDL_GetWindowID(focus)) != nullptr);
+        m_MacRawWacomInput->setActive(macCaptureAndFocus);
     }
-    if (m_MacNormalizedPen) {
-        SDL_Window* focus = SDL_GetKeyboardFocus();
-        m_MacNormalizedPen->setActive(active && focus &&
-            presentationWindow(SDL_GetWindowID(focus)) != nullptr);
-    }
+    syncMacNormalizedPenActive(macCaptureAndFocus);
 #endif
     if (active) {
         setCursorVisible(m_LocalCursorSupported ?

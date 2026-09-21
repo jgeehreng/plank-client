@@ -2,6 +2,7 @@
 #include "macrawwacomasync.h"
 #include "macrawwacomlogic.h"
 #include "linuxrawwacom.h" // shared device-family policy; no Linux dependencies
+#include "../macwindow.h"
 #include <Limelight.h>
 #include <SDL3/SDL.h>
 #include <IOKit/hid/IOHIDManager.h>
@@ -134,6 +135,10 @@ public:
     {
         barrier(lifecycle.setActive(value));
     }
+    bool isAttached() const
+    {
+        return attached.load(std::memory_order_acquire);
+    }
     void beginReconnect() { barrier(lifecycle.beginReconnect()); }
     void finishReconnect() { barrier(lifecycle.finishReconnect()); }
     void control(const unsigned char* data, unsigned length)
@@ -178,7 +183,9 @@ private:
     std::vector<std::unique_ptr<Interface>> interfaces;
     std::uint16_t generation = 0;
     std::uint32_t sequence = 0;
-    bool pending = false, attached = false, ioFailed = false;
+    bool pending = false, ioFailed = false;
+    std::atomic<bool> attached{false};
+    bool inputMonitoringDeniedLogged = false;
     Clock::time_point retry{}, deadline{};
 
     bool barrier(std::uint64_t ticket)
@@ -211,7 +218,7 @@ private:
         if (result != kIOReturnSuccess || size <= 0 || size > PLANK_RAW_HID_MAX_REPORT_SIZE) {
             self.ioFailed = true; return;
         }
-        if (!self.attached || !self.lifecycle.canForward()) return;
+        if (!self.attached.load(std::memory_order_acquire) || !self.lifecycle.canForward()) return;
         if (!self.send(PLANK_RAW_HID_INPUT, interface.index, ++self.sequence, bytes, size)) {
             self.ioFailed = true; return;
         }
@@ -247,10 +254,11 @@ private:
     }
     void release(bool destructive)
     {
-        if (pending || attached || !interfaces.empty()) reportResults->invalidate();
-        if (pending || attached)
+        if (pending || attached.load() || !interfaces.empty()) reportResults->invalidate();
+        if (pending || attached.load())
             send(destructive ? PLANK_RAW_HID_DETACH : PLANK_RAW_HID_SUSPEND, 0, 0);
-        pending = attached = false;
+        pending = false;
+        attached.store(false);
         for (const auto& i : interfaces) {
             IOHIDDeviceRegisterInputReportCallback(i->device, i->buffer.data(), i->buffer.size(), nullptr, nullptr);
             IOHIDDeviceRegisterRemovalCallback(i->device, nullptr, nullptr);
@@ -264,7 +272,16 @@ private:
     }
     bool discover()
     {
-        if (IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted) return false;
+        if (IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted) {
+            if (!inputMonitoringDeniedLogged) {
+                inputMonitoringDeniedLogged = true;
+                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                            "Mac Wacom Input Monitoring is not granted; raw HID stays idle");
+                MacWindow::openInputMonitoringSettings();
+            }
+            return false;
+        }
+        inputMonitoringDeniedLogged = false;
         IOHIDManagerRef manager = IOHIDManagerCreate(kCFAllocatorDefault, 0);
         if (!manager) return false;
         const int vendor = 0x056a;
@@ -298,7 +315,12 @@ private:
                 [parent](const Entry& e) { return e.parent != parent; }), candidates.end());
             success = candidates.size() <= PLANK_RAW_HID_MAX_INTERFACES;
             const auto product = number(candidates.front().device, CFSTR(kIOHIDProductIDKey));
-            success &= plankWacomTransportForUsbDevice(vendor, product) == PlankWacomTransport::ExactRawHid;
+            if (plankWacomTransportForUsbDevice(vendor, product) != PlankWacomTransport::ExactRawHid) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                            "Mac Wacom %04x:%04lx uses normalized pen, not exclusive raw HID",
+                            vendor, product);
+                success = false;
+            }
             for (const auto& candidate : candidates) {
                 if (!success) break;
                 CFTypeRef descriptor = IOHIDDeviceGetProperty(candidate.device, CFSTR(kIOHIDReportDescriptorKey));
@@ -384,7 +406,8 @@ private:
                 SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Mac Wacom host attach rejected: %d", int(status));
                 release(false); retry = Clock::now() + std::chrono::seconds(1); return;
             }
-            pending = false; attached = true;
+            pending = false;
+            attached.store(true);
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Mac Wacom attached; exclusive raw HID forwarding active");
             return;
         }
@@ -504,6 +527,7 @@ MacRawWacomInput::MacRawWacomInput(std::function<void()> activity)
     : m_Impl(std::make_shared<Impl>(std::move(activity))) { m_Impl->start(); }
 MacRawWacomInput::~MacRawWacomInput() { m_Impl->shutdown(); }
 void MacRawWacomInput::setActive(bool active) { m_Impl->setActive(active); }
+bool MacRawWacomInput::isAttached() const { return m_Impl && m_Impl->isAttached(); }
 void MacRawWacomInput::beginReconnect() { m_Impl->beginReconnect(); }
 void MacRawWacomInput::finishReconnect() { m_Impl->finishReconnect(); }
 void MacRawWacomInput::handleControl(const unsigned char* data, unsigned int length) { m_Impl->control(data, length); }

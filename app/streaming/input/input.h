@@ -203,6 +203,10 @@ private:
                                    int windowX, int windowY,
                                    bool allowClampedPosition);
     bool ignorePenAsMouse(unsigned mouseId) const;
+#ifdef HAVE_MAC_RAW_WACOM
+    bool macRawHidAttached() const;
+    void syncMacNormalizedPenActive(bool captureAndFocus);
+#endif
     bool mapWindowPointToNormalized(SDL_Window* window,
                                     float windowX, float windowY,
                                     float& nx, float& ny,
