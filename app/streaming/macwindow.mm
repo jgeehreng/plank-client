@@ -130,3 +130,19 @@ void MacWindow::logGeometry(SDL_Window* window)
                     pixelWidth, pixelHeight, (double)nativeWindow.backingScaleFactor);
     }
 }
+
+void MacWindow::openInputMonitoringSettings()
+{
+    void (^open)(void) = ^{
+        NSURL* url = [NSURL URLWithString:
+            @"x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"];
+        if (url != nil) {
+            [[NSWorkspace sharedWorkspace] openURL:url];
+        }
+    };
+    if ([NSThread isMainThread]) {
+        open();
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), open);
+}

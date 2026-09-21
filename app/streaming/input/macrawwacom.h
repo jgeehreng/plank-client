@@ -15,6 +15,7 @@ public:
     explicit MacRawWacomInput(std::function<void()> tabletActivity);
     ~MacRawWacomInput();
     void setActive(bool active);
+    bool isAttached() const;
     void beginReconnect();
     void finishReconnect();
     void handleControl(const unsigned char* data, unsigned int length);
