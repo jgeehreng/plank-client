@@ -170,9 +170,16 @@ SdlInputHandler::~SdlInputHandler()
     }
     m_WaylandTabletCursorOutputs.clear();
 
+    if (m_RemoteCursor != nullptr || m_BlankCursor != nullptr) {
+        SDL_SetCursor(SDL_GetDefaultCursor());
+    }
     if (m_RemoteCursor != nullptr) {
         SDL_DestroyCursor(m_RemoteCursor);
         m_RemoteCursor = nullptr;
+    }
+    if (m_BlankCursor != nullptr) {
+        SDL_DestroyCursor(m_BlankCursor);
+        m_BlankCursor = nullptr;
     }
 
 #ifdef STEAM_LINK
@@ -626,10 +633,7 @@ void SdlInputHandler::applyPendingRemoteCursor()
     }
 
     const bool firstCursor = m_RemoteCursor == nullptr;
-    SDL_SetCursor(replacement);
-    if (m_RemoteCursor != nullptr) {
-        SDL_DestroyCursor(m_RemoteCursor);
-    }
+    SDL_Cursor* previous = m_RemoteCursor;
     m_RemoteCursor = replacement;
     m_RemoteCursorVisible =
             (cursor.flags & PLANK_CURSOR_FLAG_VISIBLE) != 0;
@@ -650,6 +654,10 @@ void SdlInputHandler::applyPendingRemoteCursor()
         output.cursor->dispatchPending();
     }
     updateTabletCursorVisibility();
+    syncCompositorCursor();
+    if (previous != nullptr) {
+        SDL_DestroyCursor(previous);
+    }
     if (isCaptureActive()) {
         setCursorVisible(!m_MouseWasInVideoRegion || m_RemoteCursorVisible);
     }
@@ -781,7 +789,7 @@ void SdlInputHandler::applyPendingTabletCursorActivation()
         m_TabletCursorActive = true;
         m_TabletCursorActivationSequence =
                 m_AppliedRemoteCursorPositionSequence;
-        SDL_HideCursor();
+        syncCompositorCursor();
         updateTabletCursorVisibility();
         SDL_LogDebug(SDL_LOG_CATEGORY_INPUT,
                      "Switched to host-authoritative Wacom cursor position");
@@ -1093,13 +1101,49 @@ void SdlInputHandler::setCursorVisible(bool visible)
         SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                     "Unable to update embedded-session cursor image: %s", SDL_GetError());
     }
-    if (visible && !m_TabletCursorActive) {
+    syncCompositorCursor();
+    updateTabletCursorVisibility();
+}
+
+SDL_Cursor* SdlInputHandler::blankCursor()
+{
+    if (m_BlankCursor != nullptr) {
+        return m_BlankCursor;
+    }
+
+    std::uint32_t pixel = 0;
+    SDL_Surface* surface = SDL_CreateSurfaceFrom(
+                1, 1, SDL_PIXELFORMAT_ARGB8888, &pixel, 4);
+    if (surface == nullptr) {
+        return nullptr;
+    }
+    m_BlankCursor = SDL_CreateColorCursor(surface, 0, 0);
+    SDL_DestroySurface(surface);
+    return m_BlankCursor;
+}
+
+void SdlInputHandler::syncCompositorCursor()
+{
+    if (m_TabletCursorActive) {
+        // A Wayland compositor keeps painting the last pointer image after
+        // SDL_HideCursor(). The transparent cursor is what removes the mouse
+        // arrow while the pen cursor is on its own surface.
+        if (SDL_Cursor* blank = blankCursor()) {
+            SDL_SetCursor(blank);
+        }
+        SDL_HideCursor();
+        return;
+    }
+
+    if (m_RemoteCursor != nullptr) {
+        SDL_SetCursor(m_RemoteCursor);
+    }
+    if (m_CompositorCursorRequestedVisible) {
         SDL_ShowCursor();
     }
     else {
         SDL_HideCursor();
     }
-    updateTabletCursorVisibility();
 }
 
 void SdlInputHandler::activateCompositorCursor()
@@ -1119,11 +1163,7 @@ void SdlInputHandler::activateCompositorCursor()
         output.cursor->setVisible(false);
         output.cursor->dispatchPending();
     }
-    if (m_CompositorCursorRequestedVisible) {
-        SDL_ShowCursor();
-    } else {
-        SDL_HideCursor();
-    }
+    syncCompositorCursor();
     SDL_LogDebug(SDL_LOG_CATEGORY_INPUT,
                  "Restored Wayland compositor cursor for mouse input");
 }

@@ -164,6 +164,7 @@ private:
     bool m_AppliedRemoteCursorValid = false;
     std::atomic_bool m_RemoteCursorUpdatePending {false};
     SDL_Cursor* m_RemoteCursor = nullptr;
+    SDL_Cursor* m_BlankCursor = nullptr;
 
     struct RemoteCursorPosition {
         std::uint64_t sequence = 0;
@@ -190,6 +191,8 @@ private:
     std::vector<WaylandTabletCursorOutput> m_WaylandTabletCursorOutputs;
 
     void setCursorVisible(bool visible);
+    void syncCompositorCursor();
+    SDL_Cursor* blankCursor();
     void activateCompositorCursor();
     PlankWaylandCursor* ensureWaylandTabletCursorAttached(
         SDL_Window* targetWindow);

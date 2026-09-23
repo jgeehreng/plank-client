@@ -5,6 +5,7 @@
 #include "settings/streamingpreferences.h"
 #include "streaming/avsynccontroller.h"
 #include "streaming/plankdisplaymode.h"
+#include "streaming/plankdisplaytransition.h"
 #include "streaming/planktoolbar.h"
 #include "streaming/streamutils.h"
 #include "streaming/input/plankmousemotion.h"
@@ -2873,6 +2874,7 @@ bool Session::startConnectionAsync(bool reconnecting,
                           acceptedEncoderBackend,
                           acceptedEncodingMode);
         };
+        bool displayTransitionSubmitted = false;
         const auto transientDisplayWorkerDrop = [](const QtNetworkReplyException& error) {
             switch (error.getError()) {
             case QNetworkReply::ConnectionRefusedError:
@@ -2891,6 +2893,10 @@ bool Session::startConnectionAsync(bool reconnecting,
             constexpr int MaximumWaitMs = 45000;
             constexpr int CancellationPollMs = 50;
             bool started = false;
+            PlankDisplayTransitionLaunch transition;
+            if (displayTransitionSubmitted) {
+                transition.noteSubmitted(0);
+            }
 
             m_WaitingForSessionCleanup.store(true);
             emit sessionCleanupWaitChanged(
@@ -2958,17 +2964,24 @@ bool Session::startConnectionAsync(bool reconnecting,
                         emit sessionCleanupWaitChanged(false, QString());
                         return false;
                     }
-                    // Skip-GDM brings the worker back on the current desktop
-                    // (often a leftover 4096x2160) before any launch can apply
-                    // the requested 3840x2160. Waiting for an exact mode match
-                    // deadlocks: the Host will not change until /launch.
-                    if (!topology.matchesRequestedHostLayout(
+                    // The first mismatched /launch submits the change. Repeating
+                    // it while the host is applying that change restarts the
+                    // worker, so the connection never settles.
+                    const bool layoutMatches = topology.matchesRequestedHostLayout(
                                 m_ResolvedHostLayout,
-                                m_ResolvedVirtualModes)) {
+                                m_ResolvedVirtualModes);
+                    if (!layoutMatches) {
                         qInfo() << "PLANK display worker is up on"
                                 << topology.layoutKind << topology.virtualModes
-                                << "; launching to apply"
+                                << "; requested"
                                 << m_ResolvedHostLayout << m_ResolvedVirtualModes;
+                    }
+                    if (transition.decide(layoutMatches, true,
+                                          static_cast<std::uint64_t>(elapsedMs)) ==
+                            PlankDisplayTransitionLaunch::Action::Wait) {
+                        qInfo() << "PLANK display transition is in progress;"
+                                   " waiting for the layout before launching again";
+                        continue;
                     }
                     startApp();
                     started = true;
@@ -2992,6 +3005,9 @@ bool Session::startConnectionAsync(bool reconnecting,
                         m_WaitingForSessionCleanup.store(false);
                         emit sessionCleanupWaitChanged(false, QString());
                         throw;
+                    }
+                    if (retryError.getStatusCode() == 425) {
+                        transition.noteSubmitted(static_cast<std::uint64_t>(elapsedMs));
                     }
                     qInfo() << "PLANK display transition is still pending:"
                             << retryError.toQString();
@@ -3037,6 +3053,7 @@ bool Session::startConnectionAsync(bool reconnecting,
                     QString::fromUtf8(e.getStatusMessage()) ==
                         QStringLiteral("PLANK workstation session is active");
             if (displayTransitionStarted) {
+                displayTransitionSubmitted = true;
                 if (!waitForReplacementWorkerAndLaunch()) {
                     return false;
                 }
