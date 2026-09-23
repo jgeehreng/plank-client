@@ -2,6 +2,9 @@
 #include "planktoolbarstats.h"
 #include "plankwaylandtoolbar.h"
 #include "videopacketlosswindow.h"
+#ifdef Q_OS_DARWIN
+#include "macwindow.h" // Uppercut: native reconnect status
+#endif
 
 #include "input/input.h"
 #include "settings/streamingpreferences.h"
@@ -287,6 +290,16 @@ bool PlankToolbar::setReconnectStatus(const QString& text, bool warning)
 {
     m_ReconnectStatus = text;
     m_ReconnectStatusWarning = warning;
+#ifdef Q_OS_DARWIN
+    if (!m_WaylandReconnectPrompt) {
+        if (text.isEmpty()) {
+            MacWindow::hideReconnectStatus(m_Window);
+        } else {
+            MacWindow::showReconnectStatus(m_Window, text.toUtf8().constData(), warning);
+        }
+        return true;
+    }
+#endif
     if (!m_WaylandReconnectPrompt) return false;
     if (m_ReconnectPromptVisible || !m_ReconnectStatus.isEmpty()) {
         redrawReconnectPrompt();
@@ -329,6 +342,20 @@ void PlankToolbar::hideReconnectPrompt()
         if (!m_ReconnectStatus.isEmpty()) redrawReconnectPrompt();
         m_WaylandReconnectPrompt->setVisible(!m_ReconnectStatus.isEmpty());
     }
+}
+
+// Uppercut: the macOS reconnect status is an AppKit view that must be
+// re-placed when the window changes. Keep the platform check here so the
+// toolbar layout in notifyWindowChanged() stays identical on every platform.
+void PlankToolbar::refreshNativeReconnectStatus()
+{
+#ifdef Q_OS_DARWIN
+    if (!m_ReconnectStatus.isEmpty()) {
+        MacWindow::showReconnectStatus(
+                    m_Window, m_ReconnectStatus.toUtf8().constData(),
+                    m_ReconnectStatusWarning);
+    }
+#endif
 }
 
 void PlankToolbar::notifyWindowChanged()
@@ -394,6 +421,9 @@ void PlankToolbar::notifyWindowChanged()
             redrawReconnectPrompt();
             m_WaylandReconnectPrompt->setVisible(true);
         }
+    }
+    else {
+        refreshNativeReconnectStatus();
     }
     if (m_Visible) {
         redraw();

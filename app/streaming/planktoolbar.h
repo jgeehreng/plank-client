@@ -78,6 +78,7 @@ private:
     void createWaylandReconnectPrompt();
     void redraw();
     void redrawReconnectPrompt();
+    void refreshNativeReconnectStatus();
     void reconnectPromptPointerEnter(int parentX, int surfaceY);
     void reconnectPromptPointerLeave();
     void reconnectPromptPointerMotion(int parentX, int surfaceY);
