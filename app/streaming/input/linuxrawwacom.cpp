@@ -169,6 +169,7 @@ LinuxRawWacomInput::LinuxRawWacomInput(std::function<void()> tabletActivity)
       m_InputSequence(0),
       m_AttachPending(false),
       m_Attached(false),
+      m_Settling(false),
       m_TabletActivity(std::move(tabletActivity))
 {
     m_Thread = std::thread(&LinuxRawWacomInput::run, this);
@@ -251,11 +252,40 @@ void LinuxRawWacomInput::run()
                 if (m_AttachFailed.exchange(false)) {
                     delayRetry = true;
                 }
-                else if (!discover() || !sendAttach()) {
+                else if (!discover()) {
                     SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
                                 "Unable to attach exact Wacom device; will retry after checking hidraw and input permissions");
                     release(false);
                     m_AttachFailed.store(true);
+                }
+                else {
+                    // The pen interface can rebind a moment after touch. Wait
+                    // before publishing so the host does not keep a finger-only
+                    // tablet for the rest of the stream.
+                    m_Settling = true;
+                    m_SettleDeadline = std::chrono::steady_clock::now() +
+                            std::chrono::milliseconds(300);
+                }
+            }
+            else if (m_Settling &&
+                     std::chrono::steady_clock::now() >= m_SettleDeadline) {
+                m_Settling = false;
+                release(false);
+                if (!discover() || !sendAttach()) {
+                    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                                "Unable to attach exact Wacom device; will retry after checking hidraw and input permissions");
+                    release(false);
+                    m_AttachFailed.store(true);
+                }
+            }
+            else if (m_Attached && !m_AttachPending &&
+                     std::chrono::steady_clock::now() - m_LastSiblingCheck >=
+                         std::chrono::milliseconds(500)) {
+                m_LastSiblingCheck = std::chrono::steady_clock::now();
+                if (rawGroupIncomplete()) {
+                    SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+                                "Wacom interface appeared after attach; reattaching the complete device");
+                    release(true);
                 }
             }
         }
@@ -309,6 +339,8 @@ bool LinuxRawWacomInput::discover()
     }
     std::sort(candidates.begin(), candidates.end());
     const std::string selectedParent = candidates.front().first;
+    m_UsbParent = selectedParent;
+    m_HidrawNodes.clear();
     const std::size_t selectedCount = static_cast<std::size_t>(std::count_if(
         candidates.begin(), candidates.end(),
         [&selectedParent](const std::pair<std::string, std::string>& candidate) {
@@ -343,6 +375,7 @@ bool LinuxRawWacomInput::discover()
         if (m_Interfaces.empty()) {
             expectedInfo = info;
         }
+        m_HidrawNodes.push_back(candidate.second);
         int descriptorSize = 0;
         if (ioctl(fd, HIDIOCGRDESCSIZE, &descriptorSize) < 0 ||
                 descriptorSize <= 0 ||
@@ -658,6 +691,42 @@ void LinuxRawWacomInput::release(bool notifyHost)
     }
     m_EventFds.clear();
     m_Interfaces.clear();
+    m_HidrawNodes.clear();
+    m_UsbParent.clear();
     m_AttachPending = false;
     m_Attached = false;
+    m_Settling = false;
+}
+
+bool LinuxRawWacomInput::rawGroupIncomplete() const
+{
+    if (m_UsbParent.empty() || m_HidrawNodes.empty()) {
+        return false;
+    }
+
+    udev* context = udev_new();
+    if (context == nullptr) {
+        return false;
+    }
+    std::vector<std::string> present;
+    udev_enumerate* enumerate = udev_enumerate_new(context);
+    udev_enumerate_add_match_subsystem(enumerate, "hidraw");
+    udev_enumerate_scan_devices(enumerate);
+    udev_list_entry* devices = udev_enumerate_get_list_entry(enumerate);
+    udev_list_entry* entry = nullptr;
+    udev_list_entry_foreach(entry, devices) {
+        udev_device* device = udev_device_new_from_syspath(
+            context, udev_list_entry_get_name(entry));
+        const char* node = device != nullptr ? udev_device_get_devnode(device) : nullptr;
+        if (device != nullptr && node != nullptr && isWacomUsbDevice(device) &&
+                usbParentPath(device) == m_UsbParent) {
+            present.emplace_back(node);
+        }
+        if (device != nullptr) {
+            udev_device_unref(device);
+        }
+    }
+    udev_enumerate_unref(enumerate);
+    udev_unref(context);
+    return plankRawWacomGroupIncomplete(m_HidrawNodes, present);
 }
