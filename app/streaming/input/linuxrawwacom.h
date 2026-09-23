@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -50,6 +51,24 @@ constexpr PlankWacomTransport plankWacomTransportForUsbDevice(
 
 PlankWacomTransportDecision plankWacomTransportForConnectedDevice();
 
+// A Wacom USB device can rebind one hidraw interface after the client has
+// already published the others. The host group is incomplete until every
+// interface that is present now was part of the attachment.
+inline bool plankRawWacomGroupIncomplete(
+        const std::vector<std::string>& attachedNodes,
+        const std::vector<std::string>& presentNodes)
+{
+    if (attachedNodes.empty()) {
+        return false;
+    }
+    return std::any_of(
+            presentNodes.cbegin(), presentNodes.cend(),
+            [&attachedNodes](const std::string& node) {
+                return std::find(attachedNodes.cbegin(), attachedNodes.cend(),
+                                 node) == attachedNodes.cend();
+            });
+}
+
 class LinuxRawWacomInput
 {
 public:
@@ -86,6 +105,7 @@ private:
     bool setGrabbed(bool grabbed);
     void suspendForFocusLoss();
     void release(bool notifyHost);
+    bool rawGroupIncomplete() const;
 
     std::atomic<bool> m_Active;
     std::atomic<bool> m_Stopping;
@@ -103,10 +123,15 @@ private:
     bool m_ControlOverflow = false;
     std::vector<HidInterface> m_Interfaces;
     std::vector<int> m_EventFds;
+    std::vector<std::string> m_HidrawNodes;
+    std::string m_UsbParent;
     std::uint16_t m_Generation;
     std::uint32_t m_InputSequence;
     bool m_AttachPending;
     bool m_Attached;
+    bool m_Settling;
+    std::chrono::steady_clock::time_point m_SettleDeadline;
+    std::chrono::steady_clock::time_point m_LastSiblingCheck;
     std::function<void()> m_TabletActivity;
     std::chrono::steady_clock::time_point m_AttachDeadline;
     LinuxWacomReportWorker m_ReportWorker;

@@ -10,6 +10,7 @@ private slots:
     void usesNormalizedPenForFirstGenerationIntuosPro();
     void usesExactRawHidForNewerWacoms();
     void doesNotApplyWacomFallbackToAnotherVendor();
+    void treatsALateHidrawInterfaceAsAnIncompleteGroup();
 };
 
 void TestWacomTransportPolicy::usesNormalizedPenForFirstGenerationIntuosPro()
@@ -36,6 +37,17 @@ void TestWacomTransportPolicy::doesNotApplyWacomFallbackToAnotherVendor()
 {
     QCOMPARE(plankWacomTransportForUsbDevice(0x1234, 0x0315),
              PlankWacomTransport::ExactRawHid);
+}
+
+void TestWacomTransportPolicy::treatsALateHidrawInterfaceAsAnIncompleteGroup()
+{
+    const std::vector<std::string> touchOnly = {"/dev/hidraw2"};
+    const std::vector<std::string> penAndTouch = {
+        "/dev/hidraw1", "/dev/hidraw2"};
+    QVERIFY(!plankRawWacomGroupIncomplete({}, penAndTouch));
+    QVERIFY(!plankRawWacomGroupIncomplete(penAndTouch, touchOnly));
+    QVERIFY(!plankRawWacomGroupIncomplete(penAndTouch, penAndTouch));
+    QVERIFY(plankRawWacomGroupIncomplete(touchOnly, penAndTouch));
 }
 
 QTEST_APPLESS_MAIN(TestWacomTransportPolicy)
