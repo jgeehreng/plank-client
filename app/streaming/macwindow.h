@@ -13,5 +13,7 @@ void tabletCursor(SDL_Window* window, const unsigned char* pixels, unsigned widt
                   unsigned height, unsigned hotX, unsigned hotY, std::uint64_t generation,
                   int x, int y, bool visible);
 void hideTabletCursor(SDL_Window* window);
+void showReconnectStatus(SDL_Window* window, const char* text, bool warning);
+void hideReconnectStatus(SDL_Window* window);
 void openInputMonitoringSettings();
 }

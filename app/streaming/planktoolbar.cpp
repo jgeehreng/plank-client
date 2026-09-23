@@ -289,6 +289,16 @@ bool PlankToolbar::setReconnectStatus(const QString& text, bool warning)
 {
     m_ReconnectStatus = text;
     m_ReconnectStatusWarning = warning;
+#ifdef Q_OS_DARWIN
+    if (!m_WaylandReconnectPrompt) {
+        if (text.isEmpty()) {
+            MacWindow::hideReconnectStatus(m_Window);
+        } else {
+            MacWindow::showReconnectStatus(m_Window, text.toUtf8().constData(), warning);
+        }
+        return true;
+    }
+#endif
     if (!m_WaylandReconnectPrompt) return false;
     if (m_ReconnectPromptVisible || !m_ReconnectStatus.isEmpty()) {
         redrawReconnectPrompt();
@@ -398,6 +408,13 @@ void PlankToolbar::notifyWindowChanged()
             m_WaylandReconnectPrompt->setVisible(true);
         }
     }
+#ifdef Q_OS_DARWIN
+    else if (!m_ReconnectStatus.isEmpty()) {
+        MacWindow::showReconnectStatus(
+                    m_Window, m_ReconnectStatus.toUtf8().constData(),
+                    m_ReconnectStatusWarning);
+    }
+#endif
     if (m_Visible) {
         redraw();
     }

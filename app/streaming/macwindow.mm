@@ -4,6 +4,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
+#include <algorithm>
 #include <cmath>
 
 @interface PlankTabletCursorView : NSView
@@ -156,6 +157,148 @@ int MacWindow::unobscuredToolbarLeft(SDL_Window* window, int currentLeft, int to
             static_cast<int>(std::floor(NSMaxX(left) - origin)),
             static_cast<int>(std::ceil(NSMinX(right) - origin)));
     }
+}
+
+@interface PlankReconnectStatusView : NSView {
+    NSString *_status;
+    BOOL _warning;
+}
+- (void)setStatus:(NSString *)status warning:(BOOL)warning;
+@end
+
+@implementation PlankReconnectStatusView
+- (id)initWithFrame:(NSRect)frame
+{
+    self = [super initWithFrame:frame];
+    if (self != nil) {
+        _status = [@"" retain];
+        self.wantsLayer = YES;
+        self.layer.contentsScale = self.window.backingScaleFactor > 0 ? self.window.backingScaleFactor : 2;
+    }
+    return self;
+}
+- (void)dealloc
+{
+    [_status release];
+    [super dealloc];
+}
+- (void)setStatus:(NSString *)status warning:(BOOL)warning
+{
+    NSString *next = status != nil ? status : @"";
+    const BOOL changed = _warning != warning || ![_status isEqualToString:next];
+    if (changed) {
+        [_status release];
+        _status = [next copy];
+        _warning = warning;
+        self.needsDisplay = YES;
+    }
+}
+- (NSView *)hitTest:(NSPoint)point { (void)point; return nil; }
+- (BOOL)acceptsFirstResponder { return NO; }
+- (BOOL)isFlipped { return YES; }
+- (void)drawRect:(NSRect)dirty
+{
+    (void)dirty;
+    NSRect bounds = self.bounds;
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 0.5, 0.5) xRadius:8 yRadius:8];
+    [[NSColor colorWithCalibratedRed:22.0 / 255.0 green:27.0 / 255.0 blue:34.0 / 255.0 alpha:1] setFill];
+    [path fill];
+    [[NSColor colorWithCalibratedRed:106.0 / 255.0 green:117.0 / 255.0 blue:132.0 / 255.0 alpha:1] setStroke];
+    path.lineWidth = 1;
+    [path stroke];
+    NSMutableParagraphStyle *style = [[[NSMutableParagraphStyle alloc] init] autorelease];
+    style.alignment = NSTextAlignmentCenter;
+    style.lineBreakMode = NSLineBreakByWordWrapping;
+    NSColor *color = _warning
+        ? [NSColor colorWithCalibratedRed:239.0 / 255.0 green:88.0 / 255.0 blue:88.0 / 255.0 alpha:1]
+        : [NSColor colorWithCalibratedRed:224.0 / 255.0 green:224.0 / 255.0 blue:224.0 / 255.0 alpha:1];
+    NSFont *font = [NSFont systemFontOfSize:18 weight:NSFontWeightSemibold];
+    NSDictionary *attributes = @{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: color,
+        NSParagraphStyleAttributeName: style,
+    };
+    NSRect text = NSInsetRect(bounds, 22, 18);
+    NSRect measured = [_status boundingRectWithSize:text.size
+        options:NSStringDrawingUsesLineFragmentOrigin attributes:attributes];
+    if (NSHeight(measured) < NSHeight(text)) {
+        text.origin.y += (NSHeight(text) - NSHeight(measured)) / 2.0;
+        text.size.height = NSHeight(measured);
+    }
+    [_status drawInRect:text withAttributes:attributes];
+}
+- (void)viewDidMoveToWindow
+{
+    [super viewDidMoveToWindow];
+    if (self.window.backingScaleFactor > 0) {
+        self.layer.contentsScale = self.window.backingScaleFactor;
+    }
+}
+@end
+
+namespace {
+void placeReconnectStatus(PlankReconnectStatusView *view)
+{
+    NSView *parent = view.superview;
+    if (parent == nil) return;
+    const CGFloat width = std::min<CGFloat>(460, std::max<CGFloat>(1, NSWidth(parent.bounds)));
+    const CGFloat height = 156;
+    const CGFloat x = std::max<CGFloat>(0, (NSWidth(parent.bounds) - width) / 2);
+    const CGFloat y = std::max<CGFloat>(0, (NSHeight(parent.bounds) - height) / 2);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    view.frame = NSMakeRect(x, y, width, height);
+    view.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMinYMargin | NSViewMaxYMargin;
+    [parent addSubview:view positioned:NSWindowAbove relativeTo:nil];
+    [CATransaction commit];
+}
+
+PlankReconnectStatusView *reconnectStatusView(SDL_Window *window, bool create)
+{
+    if (!window) return nil;
+    NSWindow *native = (__bridge NSWindow *)SDL_GetPointerProperty(
+        SDL_GetWindowProperties(window), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
+    if (native.contentView == nil) return nil;
+    for (NSView *view in native.contentView.subviews) {
+        if ([view isKindOfClass:[PlankReconnectStatusView class]]) {
+            return (PlankReconnectStatusView *)view;
+        }
+    }
+    if (!create) return nil;
+    PlankReconnectStatusView *view = [[PlankReconnectStatusView alloc] initWithFrame:NSZeroRect];
+    [native.contentView addSubview:view positioned:NSWindowAbove relativeTo:nil];
+    [view release];
+    return view;
+}
+
+void updateReconnectStatus(SDL_Window *window, const char *text, bool warning, bool visible)
+{
+    void (^update)(void) = ^{
+        @autoreleasepool {
+            PlankReconnectStatusView *view = reconnectStatusView(window, visible);
+            if (view == nil) return;
+            if (!visible) {
+                view.hidden = YES;
+                return;
+            }
+            [view setStatus:[NSString stringWithUTF8String:text != nullptr ? text : ""] warning:warning];
+            placeReconnectStatus(view);
+            view.hidden = NO;
+        }
+    };
+    if ([NSThread isMainThread]) update();
+    else dispatch_sync(dispatch_get_main_queue(), update);
+}
+}
+
+void MacWindow::showReconnectStatus(SDL_Window *window, const char *text, bool warning)
+{
+    updateReconnectStatus(window, text, warning, true);
+}
+
+void MacWindow::hideReconnectStatus(SDL_Window *window)
+{
+    updateReconnectStatus(window, "", false, false);
 }
 
 void MacWindow::openInputMonitoringSettings()
