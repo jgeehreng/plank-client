@@ -892,10 +892,10 @@ void SdlInputHandler::notifyFocusGained()
 #endif
 #ifdef HAVE_LIBINPUT_TABLET
     if (m_LinuxWacomInput) {
-        m_LinuxWacomInput->setActive(true);
+        m_LinuxWacomInput->setActive(isCaptureActive());
     }
     if (m_LinuxRawWacomInput) {
-        m_LinuxRawWacomInput->setActive(true);
+        m_LinuxRawWacomInput->setActive(isCaptureActive());
     }
 #endif
 }
@@ -1108,6 +1108,17 @@ void SdlInputHandler::setCaptureActive(bool active)
         setCursorVisible(true);
         m_FakeMouseCaptureActive = false;
     }
+#ifdef HAVE_LIBINPUT_TABLET
+    // Grab the pen only while this stream owns the pointer. Leaving the grab
+    // up after logout makes Wayland drop the pen, and the local cursor
+    // disappears when the pen leaves the tablet.
+    if (m_LinuxWacomInput) {
+        m_LinuxWacomInput->setActive(active && isCaptureActive());
+    }
+    if (m_LinuxRawWacomInput) {
+        m_LinuxRawWacomInput->setActive(active && isCaptureActive());
+    }
+#endif
 
     // Update mouse pointer region constraints
     updatePointerRegionLock();
