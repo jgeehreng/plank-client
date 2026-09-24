@@ -2928,13 +2928,24 @@ bool Session::startConnectionAsync(bool reconnecting,
                         }
                         http = std::make_unique<NvHTTP>(m_Computer);
                         if (reconnecting) http->setRequestGate([this](bool auth) { return waitForPlankReconnectRequest(auth); });
+                        bool greeterConfirmed = false;
                         const QString token = http->authenticate(
                                     m_PlankUsername,
-                                    m_PlankPassword);
+                                    m_PlankPassword,
+                                    &greeterConfirmed,
+                                    !m_ReachedUserDesktop.load());
                         {
                             QWriteLocker lock(&m_Computer->lock);
                             m_Computer->sessionToken = token;
                             m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
+                        }
+                        if (greeterConfirmed && m_ReachedUserDesktop.load()) {
+                            qInfo() << "PLANK replacement worker is the sign-in screen after logout";
+                            m_LogoutReturnedToLogin.store(true);
+                            m_ReconnectCancelled.store(true);
+                            m_WaitingForSessionCleanup.store(false);
+                            emit sessionCleanupWaitChanged(false, QString());
+                            return false;
                         }
                         authenticationRefreshRequired = false;
                         qInfo() << "PLANK authenticated to the replacement display worker";
@@ -2975,6 +2986,14 @@ bool Session::startConnectionAsync(bool reconnecting,
                                 << topology.layoutKind << topology.virtualModes
                                 << "; requested"
                                 << m_ResolvedHostLayout << m_ResolvedVirtualModes;
+                    }
+                    if (reconnecting && m_ReachedUserDesktop.load() && !layoutMatches) {
+                        qInfo() << "PLANK reconnect stopped on the sign-in layout after the desktop was open";
+                        m_LogoutReturnedToLogin.store(true);
+                        m_ReconnectCancelled.store(true);
+                        m_WaitingForSessionCleanup.store(false);
+                        emit sessionCleanupWaitChanged(false, QString());
+                        return false;
                     }
                     if (transition.decide(layoutMatches, true,
                                           static_cast<std::uint64_t>(elapsedMs)) ==
@@ -3424,11 +3443,10 @@ bool Session::runPlankReconnect()
             if (token.isEmpty()) {
                 authenticating = true;
                 bool greeterConfirmed = false;
-                // A sign-in screen after the desktop was already open is a logout
-                // only when the host says so. Sending start_desktop lets PAM put
-                // the desktop back when the X server disappeared underneath us.
+                // After the user desktop has been seen, do not ask PAM to open
+                // another one. A confirmed sign-in screen is a logout.
                 token = http.authenticate(m_PlankUsername, m_PlankPassword, &greeterConfirmed,
-                                          true);
+                                          !m_ReachedUserDesktop.load());
                 authenticating = false;
                 {
                     QWriteLocker lock(&m_Computer->lock);
