@@ -3424,8 +3424,11 @@ bool Session::runPlankReconnect()
             if (token.isEmpty()) {
                 authenticating = true;
                 bool greeterConfirmed = false;
+                // A sign-in screen after the desktop was already open is a logout
+                // only when the host says so. Sending start_desktop lets PAM put
+                // the desktop back when the X server disappeared underneath us.
                 token = http.authenticate(m_PlankUsername, m_PlankPassword, &greeterConfirmed,
-                                          !m_ReachedUserDesktop.load());
+                                          true);
                 authenticating = false;
                 {
                     QWriteLocker lock(&m_Computer->lock);
