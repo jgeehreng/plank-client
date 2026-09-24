@@ -172,6 +172,24 @@ NvHTTP::getPlankOccupied(QString serverInfo)
 }
 
 QString
+NvHTTP::getPlankSessionUser(QString serverInfo)
+{
+    const QString name = getXmlString(serverInfo, "PlankSessionUser");
+    if (name.size() < 1 || name.size() > 64) {
+        return QString();
+    }
+    for (const QChar character : name) {
+        const char16_t code = character.unicode();
+        const bool letter = (code >= 'A' && code <= 'Z') || (code >= 'a' && code <= 'z');
+        const bool digit = code >= '0' && code <= '9';
+        if (!letter && !digit && code != '.' && code != '_' && code != '-') {
+            return QString();
+        }
+    }
+    return name;
+}
+
+QString
 NvHTTP::getServerInfo(NvLogLevel logLevel, bool fastFail)
 {
     const QString serverInfo = openConnectionToString(

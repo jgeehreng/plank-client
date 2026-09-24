@@ -110,6 +110,7 @@ public:
     NvAddress activeAddress;
     int currentGameId;
     bool plankOccupied = false;
+    QString plankSessionUser;
     QString appVersion;
     QVector<NvDisplayMode> displayModes;
     int serverCodecModeSupport;

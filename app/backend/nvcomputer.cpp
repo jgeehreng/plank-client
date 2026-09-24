@@ -63,6 +63,7 @@ NvComputer::NvComputer(NvAddress address, QString nickname, int videoProfile,
     this->authorizationState = AS_UNKNOWN;
     this->currentGameId = 0;
     this->plankOccupied = false;
+    this->plankSessionUser.clear();
     this->serverCodecModeSupport = 0;
     this->externalPort = address.port();
 }
@@ -94,6 +95,7 @@ bool NvComputer::updateManualBookmark(NvAddress address, QString nickname,
         state = CS_UNKNOWN;
         currentGameId = 0;
         plankOccupied = false;
+        plankSessionUser.clear();
         plankAuthentication = false;
         plankHostMetadataVersion = 0;
         plankHostVersion.clear();
@@ -215,6 +217,7 @@ NvComputer::NvComputer(QSettings& settings)
 
     this->currentGameId = 0;
     this->plankOccupied = false;
+    this->plankSessionUser.clear();
     this->authorizationState = AS_UNKNOWN;
     this->state = CS_UNKNOWN;
     this->appVersion = nullptr;
@@ -382,6 +385,8 @@ NvComputer::NvComputer(NvHTTP& http, QString serverInfo)
                 AS_AUTHORIZED : AS_UNAUTHORIZED;
     this->currentGameId = NvHTTP::getCurrentGame(serverInfo);
     this->plankOccupied = NvHTTP::getPlankOccupied(serverInfo);
+    this->plankSessionUser = this->plankOccupied ?
+                NvHTTP::getPlankSessionUser(serverInfo) : QString();
     this->appVersion = NvHTTP::getXmlString(serverInfo, "appversion");
     this->activeAddress = http.address();
     this->state = NvComputer::CS_ONLINE;
@@ -640,6 +645,7 @@ bool NvComputer::update(const NvComputer& that, NvAddress expectedAddress)
     ASSIGN_IF_CHANGED(serverCodecModeSupport);
     ASSIGN_IF_CHANGED(currentGameId);
     ASSIGN_IF_CHANGED(plankOccupied);
+    ASSIGN_IF_CHANGED(plankSessionUser);
     ASSIGN_IF_CHANGED(activeAddress);
     ASSIGN_IF_CHANGED(state);
     ASSIGN_IF_CHANGED(appVersion);

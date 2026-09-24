@@ -127,7 +127,22 @@ CenteredGridView {
         width: pcGrid.cellWidth
         height: 76
         grid: pcGrid
-        Accessible.name: model.inSession ? qsTr("%1, in session").arg(model.name) : model.name
+        function sessionStatusText() {
+            if (model.statusUnknown)
+                return qsTr("Checking")
+            if (!model.online)
+                return qsTr("Offline")
+            if (!model.inSession)
+                return qsTr("Online")
+            if (model.sessionUser)
+                return qsTr("In Session - %1").arg(model.sessionUser)
+            return qsTr("In Session")
+        }
+
+        Accessible.name: model.inSession ?
+                          (model.sessionUser ? qsTr("%1, in session - %2").arg(model.name).arg(model.sessionUser)
+                                             : qsTr("%1, in session").arg(model.name))
+                          : model.name
         hoverEnabled: true
 
         background: Rectangle {
@@ -198,7 +213,7 @@ CenteredGridView {
 
         Column {
             id: workstationStatus
-            width: 190
+            width: 280
             anchors.right: parent.right
             anchors.rightMargin: 18
             anchors.verticalCenter: parent.verticalCenter
@@ -206,9 +221,8 @@ CenteredGridView {
 
             Label {
                 width: parent.width
-                text: model.statusUnknown ? qsTr("Checking") :
-                      !model.online ? qsTr("Offline") :
-                      model.inSession ? qsTr("In Session") : qsTr("Online")
+                text: pcEntry.sessionStatusText()
+                elide: Text.ElideLeft
                 color: model.statusUnknown ? theme.textSecondary :
                        !model.online ? theme.textDisabled :
                        model.inSession ? theme.danger : theme.success
@@ -234,9 +248,7 @@ CenteredGridView {
             sourceComponent: NavigableMenu {
                 id: pcContextMenu
                 MenuItem {
-                    text: qsTr("PC Status: %1").arg(model.statusUnknown ? qsTr("Checking") :
-                          !model.online ? qsTr("Offline") :
-                          model.inSession ? qsTr("In Session") : qsTr("Online"))
+                    text: qsTr("PC Status: %1").arg(pcEntry.sessionStatusText())
                     font.bold: true
                     enabled: false
                 }
