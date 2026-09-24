@@ -5087,6 +5087,8 @@ DispatchDeferredCleanup:
         m_ReconnectRequested.store(false);
     }
     m_InputHandler->setCaptureActive(false);
+    SDL_SetCursor(SDL_GetDefaultCursor());
+    SDL_ShowCursor();
     SDL_EnableScreenSaver();
     SDL_SetHint(SDL_HINT_TIMER_RESOLUTION, "0");
     if (QGuiApplication::platformName() == "eglfs") {
