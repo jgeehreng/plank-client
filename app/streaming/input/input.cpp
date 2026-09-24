@@ -655,11 +655,32 @@ void SdlInputHandler::applyPendingRemoteCursor()
     }
     updateTabletCursorVisibility();
     syncCompositorCursor();
+    if (isCaptureActive()) {
+        if (!m_RemoteCursorVisible && m_TabletCursorActive && previous != nullptr) {
+            SDL_DestroyCursor(m_RemoteCursor);
+            m_RemoteCursor = previous;
+            previous = nullptr;
+            m_RemoteCursorVisible = true;
+            m_HoldLocalPointer = true;
+            activateCompositorCursor();
+            setCursorVisible(true);
+        }
+        else if (m_HoldLocalPointer && !m_RemoteCursorVisible && previous != nullptr) {
+            SDL_DestroyCursor(m_RemoteCursor);
+            m_RemoteCursor = previous;
+            previous = nullptr;
+            m_RemoteCursorVisible = true;
+            setCursorVisible(true);
+        }
+        else {
+            if (m_RemoteCursorVisible) {
+                m_HoldLocalPointer = false;
+            }
+            setCursorVisible(!m_MouseWasInVideoRegion || m_RemoteCursorVisible);
+        }
+    }
     if (previous != nullptr) {
         SDL_DestroyCursor(previous);
-    }
-    if (isCaptureActive()) {
-        setCursorVisible(!m_MouseWasInVideoRegion || m_RemoteCursorVisible);
     }
 
     if (firstCursor) {
@@ -786,6 +807,7 @@ void SdlInputHandler::applyPendingTabletCursorActivation()
     }
 
     if (!m_TabletCursorActive) {
+        m_HoldLocalPointer = false;
         m_TabletCursorActive = true;
         m_TabletCursorActivationSequence =
                 m_AppliedRemoteCursorPositionSequence;

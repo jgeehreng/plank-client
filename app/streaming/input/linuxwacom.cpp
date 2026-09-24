@@ -321,7 +321,7 @@ void LinuxWacomInput::handleTabletEvent(libinput_event_tablet_tool* event,
                        std::max(0.0f, std::min(1.0f, m_Y)),
                        std::max(0.0f, std::min(1.0f, pressureOrDistance)),
                        0.0f, 0.0f, m_Rotation, m_Tilt);
-        if (m_TabletActivity) {
+        if (m_TabletActivity && eventType != LI_TOUCH_EVENT_HOVER_LEAVE) {
             m_TabletActivity();
         }
     }

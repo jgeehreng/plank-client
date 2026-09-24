@@ -137,6 +137,9 @@ private:
     bool m_RemoteCursorVisible;
     bool m_CompositorCursorRequestedVisible;
     bool m_TabletCursorActive;
+    // The sign-in screen clears the host cursor when the pen leaves. Keep the
+    // local pointer shown until the host publishes a visible cursor again.
+    bool m_HoldLocalPointer = false;
 
     QSet<short> m_KeysDown;
     bool m_FakeMouseCaptureActive;
