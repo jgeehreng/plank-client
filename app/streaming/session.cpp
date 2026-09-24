@@ -4831,6 +4831,12 @@ void Session::execInternal()
                 presentationMappingDeferred = false;
                 SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                             "Mapped initialized Wayland presentation surface");
+                // The Wacom cursor subsurface is created while this window is
+                // still unmapped. Wayland drops that commit, so attach it
+                // again now that the presentation surface is on screen.
+                if (m_InputHandler != nullptr) {
+                    m_InputHandler->refreshWaylandTabletCursorParents();
+                }
                 initializePlankToolbar();
             }
 
