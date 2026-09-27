@@ -638,7 +638,8 @@ bool NvHTTP::probeWorkerReplacement(const QString& instance, const QString& cert
                 QByteArray::fromHex(certificateSha256.toLatin1()), certificate);
 }
 
-QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed, AuthenticationIntent intent)
+QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed,
+                             AuthenticationIntent intent, bool startDesktop)
 {
     if (greeterConfirmed != nullptr) *greeterConfirmed = false;
     SecureStringGuard passwordGuard(password);
@@ -650,7 +651,10 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
     // preflight may observe a worker change, but must not learn a new authority.
     establishHostTrust(intent);
 
-    QJsonObject result = postPlankJson("start", {{"username", username}});
+    QJsonObject result = postPlankJson("start", {
+        {"username", username},
+        {"start_desktop", startDesktop},
+    });
     for (int round = 0; round < 16; ++round) {
         const QString state = result.value("state").toString();
         if (state == "authenticated") {
@@ -696,6 +700,7 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         result = postPlankJson("respond", {
             {"conversation_id", result.value("conversation_id").toString()},
             {"responses", responses},
+            {"start_desktop", startDesktop},
         });
     }
 

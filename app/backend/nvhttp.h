@@ -192,7 +192,8 @@ public:
     // removed while this process was streaming.
     enum class AuthenticationIntent { ExplicitConnection, Recovery };
     QString authenticate(QString username, QString password, bool* greeterConfirmed = nullptr,
-                         AuthenticationIntent intent = AuthenticationIntent::ExplicitConnection);
+                         AuthenticationIntent intent = AuthenticationIntent::ExplicitConnection,
+                         bool startDesktop = true);
     bool probeWorkerReplacement(const QString& instance, const QString& certificateSha256);
     QString workerInstance() const { return m_WorkerInstance; }
     NvOutputTopology getOutputTopology(QString* certificateSha256 = nullptr);
