@@ -41,7 +41,7 @@ inline QJsonObject profile(const QString& name, const QString& mode)
 inline QJsonArray profiles(const QString& name, const QString& mode)
 {
     QJsonArray result;
-#ifdef Q_OS_LINUX
+#ifdef PLANK_TIMED_MICROPHONE
     if (name == QLatin1String("microphone")) {
         auto timed = profile(name, mode);
         timed.insert("schema_version", 3); timed.insert("capture_clock", "monotonic-ns");
