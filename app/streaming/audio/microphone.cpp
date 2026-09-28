@@ -4,7 +4,7 @@
 #include <QDebug>
 #include <chrono>
 #include <memory>
-#ifdef PLANK_TIMED_MICROPHONE
+#if defined(Q_OS_LINUX) && !defined(PLANK_NO_TIMED_MICROPHONE)
 #include "linuxmicrophone.h"
 #endif
 #ifdef Q_OS_MACOS
@@ -48,7 +48,7 @@ void PlankMicrophone::run()
     m_State.store(State::Unavailable);
 #else
     using Clock = std::chrono::steady_clock;
-#ifdef PLANK_TIMED_MICROPHONE
+#if defined(Q_OS_LINUX) && !defined(PLANK_NO_TIMED_MICROPHONE)
     std::unique_ptr<PlankLinuxMicrophone> timedCapture;
     std::uint64_t timedNextSample = 0;
 #endif
@@ -56,7 +56,7 @@ void PlankMicrophone::run()
     OpusEncoder* encoder = nullptr;
     bool audioInitialized = false;
     const auto closeCapture = [&] {
-#ifdef PLANK_TIMED_MICROPHONE
+#if defined(Q_OS_LINUX) && !defined(PLANK_NO_TIMED_MICROPHONE)
         timedCapture.reset();
 #endif
         if (stream) SDL_DestroyAudioStream(stream);
@@ -123,7 +123,7 @@ void PlankMicrophone::run()
         }
         if (!enabled) { m_State.store(State::Off); continue; }
         if (ackState != PLANK_TRANSPORT_MICROPHONE_ACTIVE) { failed = true; continue; }
-#ifdef PLANK_TIMED_MICROPHONE
+#if defined(Q_OS_LINUX) && !defined(PLANK_NO_TIMED_MICROPHONE)
         if (m_Timed) {
             if (!timedCapture) {
                 timedCapture.reset(new PlankLinuxMicrophone);

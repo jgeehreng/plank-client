@@ -41,7 +41,9 @@ inline QJsonObject profile(const QString& name, const QString& mode)
 inline QJsonArray profiles(const QString& name, const QString& mode)
 {
     QJsonArray result;
-#ifdef PLANK_TIMED_MICROPHONE
+// Timestamped capture requires PipeWire 1.0.5, so builds for older
+// distributions define PLANK_NO_TIMED_MICROPHONE and offer SDL capture only.
+#if defined(Q_OS_LINUX) && !defined(PLANK_NO_TIMED_MICROPHONE)
     if (name == QLatin1String("microphone")) {
         auto timed = profile(name, mode);
         timed.insert("schema_version", 3); timed.insert("capture_clock", "monotonic-ns");

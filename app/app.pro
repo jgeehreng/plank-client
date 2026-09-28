@@ -193,8 +193,10 @@ unix:if(!macx|disable-prebuilts) {
 # Timestamped microphone capture requires PipeWire 1.0.5 or newer. Builds for
 # older distributions pass CONFIG+=plank-sdl-microphone, which omits the timed
 # profile from negotiation and uses the SDL capture path.
+linux:plank-sdl-microphone {
+    DEFINES += PLANK_NO_TIMED_MICROPHONE
+}
 linux:!plank-sdl-microphone {
-    DEFINES += PLANK_TIMED_MICROPHONE
     PKGCONFIG += libpipewire-0.3
     SOURCES += streaming/audio/linuxmicrophone.cpp
     HEADERS += streaming/audio/linuxmicrophone.h streaming/audio/microphonecapturequeue.h streaming/audio/microphonecaptureclock.h
