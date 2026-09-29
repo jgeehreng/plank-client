@@ -871,23 +871,24 @@ int main(int argc, char *argv[])
     QCoreApplication::translate("QPlatformTheme", "Cancel");
 
     // After the QGuiApplication is created, the platform stuff will be initialized
-    // and we can set the SDL video driver to match Qt.
+    // and we can set the SDL video driver to match Qt. SDL3 snapshots the process
+    // environment on first use, so the driver must be passed as a hint.
     if (QGuiApplication::platformName() == "xcb") {
         if (WMUtils::isRunningWayland()) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Detected XWayland. This will probably break hardware decoding! Try running with QT_QPA_PLATFORM=wayland or switch to X11.");
         }
-        qputenv("SDL_VIDEODRIVER", "x11");
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11");
     }
     else if (QGuiApplication::platformName().startsWith("wayland")) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Detected Wayland");
-        qputenv("SDL_VIDEODRIVER", "wayland");
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
     }
 #ifndef STEAM_LINK
     // Force use of the KMSDRM backend for SDL when using Qt platform plugins
     // that directly draw to the display without a windowing system.
     else if (QGuiApplication::platformName() == "eglfs" || QGuiApplication::platformName() == "linuxfb") {
-        qputenv("SDL_VIDEODRIVER", "kmsdrm");
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "kmsdrm");
     }
 #endif
 
