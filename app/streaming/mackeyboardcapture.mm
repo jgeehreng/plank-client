@@ -211,6 +211,11 @@ struct MacKeyboardCapture::State
     void refresh()
     {
         if (!ownsKeyboard()) { deactivate(); return; }
+        // A healthy tap is already authorized. Rechecking TCC every second
+        // on the main runloop hitches HID report delivery after Input
+        // Monitoring is granted. Revocation disables the tap instead.
+        if (active && tap && CFMachPortIsValid(tap) && CGEventTapIsEnabled(tap))
+            return;
         if (!isTrusted()) {
             // A grant after revocation must create a fresh authorized tap,
             // not try to reuse a port that TCC may have permanently disabled.
