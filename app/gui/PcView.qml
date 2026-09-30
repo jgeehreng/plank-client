@@ -47,6 +47,7 @@ CenteredGridView {
 
     function authenticationComplete(error, pcIndex)
     {
+        loginDialog.signingIn = false
         authenticationTakeoverDialog.close()
         hostTrustDialog.close()
         loginDialog.close()
@@ -56,6 +57,11 @@ CenteredGridView {
         } else {
             launchPlankDesktop(pcIndex)
         }
+    }
+
+    function startWorkstationSignIn()
+    {
+        loginDialog.startSignIn()
     }
 
     function launchPlankDesktop(pcIndex)
@@ -98,6 +104,7 @@ CenteredGridView {
             hostTrustDialog.open()
         })
         model.authenticationCancelled.connect(function() {
+            loginDialog.signingIn = false
             authenticationTakeoverDialog.close()
             hostTrustDialog.close()
             loginDialog.close()
@@ -400,12 +407,15 @@ CenteredGridView {
     NavigableDialog {
         id: loginDialog
         property int pcIndex: -1
+        property bool signingIn: false
         title: qsTr("Sign in to workstation")
         modal: true
-        closePolicy: Popup.CloseOnEscape
-        standardButtons: Dialog.Ok | Dialog.Cancel
+        closePolicy: signingIn ? Popup.NoAutoClose : Popup.CloseOnEscape
+        standardButtons: Dialog.NoButton
 
         onOpened: {
+            if (signingIn)
+                return
             usernameField.text = computerModel.rememberedUsername(pcIndex)
             passwordField.clear()
             if (usernameField.text)
@@ -414,13 +424,36 @@ CenteredGridView {
                 usernameField.forceActiveFocus()
         }
         onClosed: {
+            signingIn = false
             usernameField.clear()
             passwordField.clear()
         }
-        onAccepted: {
-            if (usernameField.text && passwordField.text) {
-                computerModel.authenticateComputer(pcIndex, usernameField.text,
-                                                   passwordField.text)
+
+        function startSignIn()
+        {
+            if (signingIn || !usernameField.text || !passwordField.text)
+                return
+            signingIn = true
+            computerModel.authenticateComputer(pcIndex, usernameField.text,
+                                               passwordField.text)
+        }
+
+        footer: DialogButtonBox {
+            background: Rectangle {
+                color: theme.surfaceRaised
+            }
+
+            Button {
+                text: qsTr("Sign in")
+                enabled: !loginDialog.signingIn && usernameField.text && passwordField.text
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                onClicked: loginDialog.startSignIn()
+            }
+            Button {
+                text: qsTr("Cancel")
+                enabled: !loginDialog.signingIn
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+                onClicked: loginDialog.reject()
             }
         }
 
@@ -441,6 +474,7 @@ CenteredGridView {
                 id: usernameField
                 Layout.fillWidth: true
                 focus: true
+                enabled: !loginDialog.signingIn
             }
             Label {
                 text: qsTr("Password")
@@ -452,8 +486,26 @@ CenteredGridView {
                 id: passwordField
                 echoMode: TextInput.Password
                 Layout.fillWidth: true
-                Keys.onReturnPressed: loginDialog.accept()
-                Keys.onEnterPressed: loginDialog.accept()
+                enabled: !loginDialog.signingIn
+                Keys.onReturnPressed: loginDialog.startSignIn()
+                Keys.onEnterPressed: loginDialog.startSignIn()
+            }
+            RowLayout {
+                visible: loginDialog.signingIn
+                spacing: 8
+                Layout.fillWidth: true
+                Layout.topMargin: 8
+
+                BusyIndicator {
+                    running: loginDialog.signingIn
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: 28
+                }
+                Label {
+                    text: qsTr("Signing in to workstation...")
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
             }
         }
     }

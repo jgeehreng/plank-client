@@ -197,10 +197,13 @@ private slots:
         QTRY_VERIFY(password->property("activeFocus").toBool());
         username->setProperty("text", "different-user"); // prefill remains editable
         password->setProperty("text", "synthetic-only");
-        QVERIFY(QMetaObject::invokeMethod(dialog, "accept"));
-        QTRY_VERIFY(!dialog->property("visible").toBool());
-        QCOMPARE(root->property("attempts").toInt(), 1);
+        QVERIFY(QMetaObject::invokeMethod(dialog, "startSignIn"));
+        QTRY_COMPARE(root->property("attempts").toInt(), 1);
         QCOMPARE(root->property("submittedUsername").toString(), QStringLiteral("different-user"));
+        QVERIFY(dialog->property("signingIn").toBool());
+        QVERIFY(dialog->property("visible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(dialog, "close"));
+        QTRY_VERIFY(!dialog->property("visible").toBool());
         QVERIFY(password->property("text").toString().isEmpty());
         QCOMPARE(warnings.count(), 0);
     }
