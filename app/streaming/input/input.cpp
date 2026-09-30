@@ -27,6 +27,7 @@
 #include <QtEndian>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs,
@@ -206,7 +207,11 @@ void SdlInputHandler::setWindow(SDL_Window *window)
 #ifdef HAVE_MAC_RAW_WACOM
     if ((LiGetHostFeatureFlags() & (LI_FF_RAW_HID_TABLET | LI_FF_RAW_HID_FOCUS_SUSPEND)) ==
             (LI_FF_RAW_HID_TABLET | LI_FF_RAW_HID_FOCUS_SUSPEND)) {
-        m_MacRawWacomInput.reset(new MacRawWacomInput(requestTabletCursor));
+        m_MacRawWacomInput.reset(new MacRawWacomInput(
+            requestTabletCursor,
+            [this](int x, int y, int maxX, int maxY) {
+                hintLocalTabletPosition(x, y, maxX, maxY);
+            }));
         refreshTabletFocus();
     }
 #endif
@@ -521,6 +526,17 @@ void SdlInputHandler::applyPendingRemoteCursorPosition()
     m_AppliedRemoteCursorPosition = position;
     m_AppliedRemoteCursorPositionValid = true;
     m_AppliedRemoteCursorPositionSequence = position.sequence;
+    if (m_TabletCursorActive && m_HaveLatestLocalTabletHint) {
+        correctTabletMapping(position);
+        std::uint32_t mappedX = 0;
+        std::uint32_t mappedY = 0;
+        if (mapLocalTabletToFrame(mappedX, mappedY)) {
+            m_AppliedRemoteCursorPosition.x = mappedX;
+            m_AppliedRemoteCursorPosition.y = mappedY;
+            position.x = mappedX;
+            position.y = mappedY;
+        }
+    }
     SDL_Window* targetWindow = nullptr;
     int x = 0;
     int y = 0;
@@ -575,6 +591,141 @@ void SdlInputHandler::applyPendingTabletCursorActivation()
         SDL_LogDebug(SDL_LOG_CATEGORY_INPUT,
                      "Switched to host-authoritative Wacom cursor position");
     }
+}
+
+void SdlInputHandler::hintLocalTabletPosition(int x, int y, int maxX, int maxY)
+{
+    if (maxX <= 0 || maxY <= 0) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_LocalTabletHintMutex);
+        m_ReadyLocalTabletHint = {x, y, maxX, maxY};
+        m_ReadyLocalTabletHintValid = true;
+    }
+    if (!m_LocalTabletHintPending.exchange(true)) {
+        Session::postTabletCursorActivationEvent();
+    }
+}
+
+void SdlInputHandler::rememberLocalTabletSample(const LocalTabletHint& hint)
+{
+    m_LocalTabletHistory[m_LocalTabletHistoryNext] = {
+        hint.x, hint.y, hint.maxX, hint.maxY, SDL_GetTicks()};
+    m_LocalTabletHistoryNext =
+            (m_LocalTabletHistoryNext + 1) %
+            int(sizeof(m_LocalTabletHistory) / sizeof(m_LocalTabletHistory[0]));
+    if (m_LocalTabletHistoryCount <
+            int(sizeof(m_LocalTabletHistory) / sizeof(m_LocalTabletHistory[0]))) {
+        ++m_LocalTabletHistoryCount;
+    }
+    m_LatestLocalTabletHint = hint;
+    m_HaveLatestLocalTabletHint = true;
+}
+
+bool SdlInputHandler::localPenIsResting(Uint64 now) const
+{
+    constexpr Uint64 restWindowMs = 80;
+    int samples = 0;
+    int minX = 0;
+    int maxX = 0;
+    int minY = 0;
+    int maxY = 0;
+    for (int i = 0; i < m_LocalTabletHistoryCount; ++i) {
+        const auto& candidate = m_LocalTabletHistory[i];
+        if (candidate.ticks > now || now - candidate.ticks > restWindowMs) {
+            continue;
+        }
+        if (samples == 0) {
+            minX = maxX = candidate.x;
+            minY = maxY = candidate.y;
+        } else {
+            minX = std::min(minX, candidate.x);
+            maxX = std::max(maxX, candidate.x);
+            minY = std::min(minY, candidate.y);
+            maxY = std::max(maxY, candidate.y);
+        }
+        ++samples;
+    }
+    return samples >= 3 && maxX - minX < 15 && maxY - minY < 15;
+}
+
+void SdlInputHandler::correctTabletMapping(const RemoteCursorPosition& host)
+{
+    if (host.frameWidth == 0 || host.frameHeight == 0 ||
+            !m_HaveLatestLocalTabletHint ||
+            m_LatestLocalTabletHint.maxX <= 0 ||
+            m_LatestLocalTabletHint.maxY <= 0) {
+        return;
+    }
+    if (!m_LocalTabletCalibrated) {
+        m_LocalTabletScaleX = static_cast<double>(host.frameWidth) /
+                m_LatestLocalTabletHint.maxX;
+        m_LocalTabletScaleY = static_cast<double>(host.frameHeight) /
+                m_LatestLocalTabletHint.maxY;
+        m_LocalTabletOffsetX = 0;
+        m_LocalTabletOffsetY = 0;
+        m_LocalTabletCalibrated = true;
+        SDL_LogInfo(SDL_LOG_CATEGORY_INPUT,
+                    "PLANK Wacom cursor tracks the local pen");
+    }
+    // Host samples arrive after the pen has already moved. Applying them
+    // during a stroke holds the cursor behind the pen. Correct only at rest,
+    // where the local and host positions are the same place.
+    if (!localPenIsResting(SDL_GetTicks())) {
+        return;
+    }
+    m_LocalTabletOffsetX = static_cast<double>(host.x) -
+            m_LatestLocalTabletHint.x * m_LocalTabletScaleX;
+    m_LocalTabletOffsetY = static_cast<double>(host.y) -
+            m_LatestLocalTabletHint.y * m_LocalTabletScaleY;
+}
+
+bool SdlInputHandler::mapLocalTabletToFrame(std::uint32_t& x, std::uint32_t& y) const
+{
+    if (!m_LocalTabletCalibrated || !m_HaveLatestLocalTabletHint ||
+            !m_AppliedRemoteCursorPositionValid ||
+            m_AppliedRemoteCursorPosition.frameWidth == 0 ||
+            m_AppliedRemoteCursorPosition.frameHeight == 0) {
+        return false;
+    }
+    const auto frameWidth = static_cast<long>(m_AppliedRemoteCursorPosition.frameWidth);
+    const auto frameHeight = static_cast<long>(m_AppliedRemoteCursorPosition.frameHeight);
+    x = static_cast<std::uint32_t>(std::clamp(
+            std::lround(m_LocalTabletOffsetX + m_LatestLocalTabletHint.x * m_LocalTabletScaleX),
+            0L, frameWidth - 1));
+    y = static_cast<std::uint32_t>(std::clamp(
+            std::lround(m_LocalTabletOffsetY + m_LatestLocalTabletHint.y * m_LocalTabletScaleY),
+            0L, frameHeight - 1));
+    return true;
+}
+
+void SdlInputHandler::applyPendingLocalTabletHint()
+{
+    LocalTabletHint hint;
+    {
+        std::lock_guard<std::mutex> lock(m_LocalTabletHintMutex);
+        if (!m_ReadyLocalTabletHintValid) {
+            m_LocalTabletHintPending.store(false);
+            return;
+        }
+        hint = m_ReadyLocalTabletHint;
+        m_ReadyLocalTabletHintValid = false;
+        m_LocalTabletHintPending.store(false);
+    }
+    rememberLocalTabletSample(hint);
+    if (!m_TabletCursorActive || !m_LocalTabletCalibrated) {
+        return;
+    }
+    std::uint32_t mappedX = 0;
+    std::uint32_t mappedY = 0;
+    if (!mapLocalTabletToFrame(mappedX, mappedY)) {
+        return;
+    }
+    m_AppliedRemoteCursorPosition.x = mappedX;
+    m_AppliedRemoteCursorPosition.y = mappedY;
+    m_AppliedRemoteCursorPositionValid = true;
+    updateTabletCursorVisibility();
 }
 
 void SdlInputHandler::raiseAllKeys()
@@ -735,6 +886,10 @@ void SdlInputHandler::resetRemoteCursorPositionEpoch()
     m_AppliedRemoteCursorPositionSequence = 0;
     m_TabletCursorActivationSequence = 0;
     m_TabletCursorActivationPending.store(false);
+    m_HaveLatestLocalTabletHint = false;
+    m_LocalTabletCalibrated = false;
+    m_LocalTabletHistoryCount = 0;
+    m_LocalTabletHistoryNext = 0;
     for (auto& output : m_WaylandTabletCursorOutputs) {
         output.cursor->setVisible(false);
         output.cursor->dispatchPending();

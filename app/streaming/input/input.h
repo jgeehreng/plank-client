@@ -72,6 +72,10 @@ public:
 
     void applyPendingTabletCursorActivation();
 
+    void hintLocalTabletPosition(int x, int y, int maxX, int maxY);
+
+    void applyPendingLocalTabletHint();
+
     void beginRawHidReconnect();
     void finishRawHidReconnect();
 
@@ -185,6 +189,37 @@ private:
     bool m_AppliedRemoteCursorPositionValid = false;
     std::atomic_bool m_RemoteCursorPositionUpdatePending {false};
     std::atomic_bool m_TabletCursorActivationPending {false};
+    struct LocalTabletHint {
+        int x = 0;
+        int y = 0;
+        int maxX = 0;
+        int maxY = 0;
+    };
+    struct LocalTabletSample {
+        int x = 0;
+        int y = 0;
+        int maxX = 0;
+        int maxY = 0;
+        Uint64 ticks = 0;
+    };
+    void rememberLocalTabletSample(const LocalTabletHint& hint);
+    bool localPenIsResting(Uint64 now) const;
+    void correctTabletMapping(const RemoteCursorPosition& host);
+    bool mapLocalTabletToFrame(std::uint32_t& x, std::uint32_t& y) const;
+    std::mutex m_LocalTabletHintMutex;
+    LocalTabletHint m_ReadyLocalTabletHint;
+    LocalTabletHint m_LatestLocalTabletHint;
+    LocalTabletSample m_LocalTabletHistory[32] {};
+    int m_LocalTabletHistoryCount = 0;
+    int m_LocalTabletHistoryNext = 0;
+    bool m_ReadyLocalTabletHintValid = false;
+    bool m_HaveLatestLocalTabletHint = false;
+    bool m_LocalTabletCalibrated = false;
+    double m_LocalTabletScaleX = 0;
+    double m_LocalTabletScaleY = 0;
+    double m_LocalTabletOffsetX = 0;
+    double m_LocalTabletOffsetY = 0;
+    std::atomic_bool m_LocalTabletHintPending {false};
     struct WaylandTabletCursorOutput {
         SDL_Window* window = nullptr;
         std::unique_ptr<PlankWaylandCursor> cursor;

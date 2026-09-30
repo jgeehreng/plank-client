@@ -12,7 +12,9 @@ public:
     static void requestPermissionIfNeeded();
     // Read-only registry enumeration: -1 unavailable, 0 absent, 1 attached.
     static int supportedTabletPresence();
-    explicit MacRawWacomInput(std::function<void()> tabletActivity);
+    using PositionHint = std::function<void(int x, int y, int maxX, int maxY)>;
+    explicit MacRawWacomInput(std::function<void()> tabletActivity,
+                              PositionHint positionHint = {});
     ~MacRawWacomInput();
     void setActive(bool active);
     void beginReconnect();

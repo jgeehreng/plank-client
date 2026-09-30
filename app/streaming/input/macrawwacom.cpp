@@ -127,8 +127,9 @@ class MacRawWacomInput::Impl : public std::enable_shared_from_this<Impl>
         std::function<void()> callback;
     };
 public:
-    explicit Impl(std::function<void()> activity)
-        : activity(std::make_shared<ActivityGuard>(std::move(activity)))
+    explicit Impl(std::function<void()> activity, MacRawWacomInput::PositionHint positionHint)
+        : activity(std::make_shared<ActivityGuard>(std::move(activity))),
+          positionHint(std::move(positionHint))
     {}
     void start()
     {
@@ -180,6 +181,10 @@ private:
         std::array<unsigned char, PLANK_RAW_HID_MAX_REPORT_SIZE> buffer{};
         std::array<bool, 256> activityReports{};
         std::vector<unsigned char> descriptor;
+        IOHIDElementRef xElement = nullptr;
+        IOHIDElementRef yElement = nullptr;
+        int xMax = 0;
+        int yMax = 0;
     };
     struct ReportRequest {
         std::weak_ptr<MacWacomAsyncResults> results;
@@ -196,6 +201,7 @@ private:
         }
     };
     std::shared_ptr<ActivityGuard> activity;
+    MacRawWacomInput::PositionHint positionHint;
     std::shared_ptr<MacWacomAsyncResults> reportResults = std::make_shared<MacWacomAsyncResults>();
     MacWacomLifecycle lifecycle;
     std::atomic<bool> stopping{false}, shutdownRequested{false}, overflow{false};
@@ -246,6 +252,18 @@ private:
         if (reportId < interface.activityReports.size() && interface.activityReports[reportId]) {
             std::lock_guard<std::mutex> lock(self.activity->mutex);
             if (self.activity->enabled && self.activity->callback) self.activity->callback();
+            if (self.positionHint && interface.xElement && interface.yElement &&
+                    interface.xMax > 0 && interface.yMax > 0) {
+                IOHIDValueRef xValue = nullptr;
+                IOHIDValueRef yValue = nullptr;
+                if (IOHIDDeviceGetValue(interface.device, interface.xElement, &xValue) == kIOReturnSuccess &&
+                        IOHIDDeviceGetValue(interface.device, interface.yElement, &yValue) == kIOReturnSuccess &&
+                        xValue && yValue) {
+                    self.positionHint(static_cast<int>(IOHIDValueGetIntegerValue(xValue)),
+                                      static_cast<int>(IOHIDValueGetIntegerValue(yValue)),
+                                      interface.xMax, interface.yMax);
+                }
+            }
         }
     }
     static void removed(void* context, IOReturn, void*)
@@ -283,6 +301,8 @@ private:
             IOHIDDeviceRegisterRemovalCallback(i->device, nullptr, nullptr);
             IOHIDDeviceUnscheduleFromRunLoop(i->device, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
             IOHIDDeviceClose(i->device, kIOHIDOptionsTypeSeizeDevice);
+            if (i->xElement) CFRelease(i->xElement);
+            if (i->yElement) CFRelease(i->yElement);
             CFRelease(i->device);
         }
         if (!interfaces.empty()) SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Mac Wacom ownership released");
@@ -351,6 +371,16 @@ private:
                             (page == 0xff0d && (usage < 0x100 || usage == 0x130 || usage == 0x131 ||
                              usage == 0x138 || (usage >= 0x910 && usage <= 0x92f) || usage == 0x995));
                         if (control && id < i->activityReports.size()) i->activityReports[id] = true;
+                        if ((page == 1 || page == 0xd) && usage == 0x30 && !i->xElement) {
+                            i->xElement = element;
+                            CFRetain(element);
+                            i->xMax = static_cast<int>(IOHIDElementGetLogicalMax(element));
+                        }
+                        if ((page == 1 || page == 0xd) && usage == 0x31 && !i->yElement) {
+                            i->yElement = element;
+                            CFRetain(element);
+                            i->yMax = static_cast<int>(IOHIDElementGetLogicalMax(element));
+                        }
                     }
                     CFRelease(elements);
                 }
@@ -519,16 +549,19 @@ private:
                     retry = Clock::now() + std::chrono::seconds(1);
                 }
             }
-            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, true);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // Drain every queued HID report. Returning after one source
+            // plus a sleep delivered tablet motion one packet at a time.
+            while (CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true) ==
+                   kCFRunLoopRunHandledSource) {}
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.005, false);
         }
         release(false);
         lifecycle.markExited();
     }
 };
 
-MacRawWacomInput::MacRawWacomInput(std::function<void()> activity)
-    : m_Impl(std::make_shared<Impl>(std::move(activity))) { m_Impl->start(); }
+MacRawWacomInput::MacRawWacomInput(std::function<void()> activity, PositionHint positionHint)
+    : m_Impl(std::make_shared<Impl>(std::move(activity), std::move(positionHint))) { m_Impl->start(); }
 MacRawWacomInput::~MacRawWacomInput() { m_Impl->shutdown(); }
 void MacRawWacomInput::setActive(bool active) { m_Impl->setActive(active); }
 void MacRawWacomInput::beginReconnect() { m_Impl->beginReconnect(); }

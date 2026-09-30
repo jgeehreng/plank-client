@@ -5,6 +5,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 @interface PlankTabletCursorView : NSView
 @property(nonatomic) std::uint64_t cursorGeneration;
@@ -38,6 +39,19 @@ void MacWindow::tabletCursor(SDL_Window* window, const unsigned char* pixels, un
                             unsigned height, unsigned hotX, unsigned hotY, std::uint64_t generation,
                             int x, int y, bool visible)
 {
+    if (![NSThread isMainThread]) {
+        std::vector<unsigned char> owned;
+        if (pixels && width && height && width <= 512 && height <= 512) {
+            owned.assign(pixels, pixels + std::size_t(width) * height * 4);
+        }
+        auto* ownedPixels = new std::vector<unsigned char>(std::move(owned));
+        dispatch_async(dispatch_get_main_queue(), ^{
+            tabletCursor(window, ownedPixels->empty() ? nullptr : ownedPixels->data(),
+                         width, height, hotX, hotY, generation, x, y, visible);
+            delete ownedPixels;
+        });
+        return;
+    }
     @autoreleasepool {
         PlankTabletCursorView* view = tabletView(window, visible);
         if (!view) return;
@@ -66,8 +80,9 @@ void MacWindow::tabletCursor(SDL_Window* window, const unsigned char* pixels, un
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         view.frame = NSMakeRect(x - static_cast<int>(hotX), nativeY, width, height);
-        // Metal/toolbar surfaces may have been replaced since the last frame.
-        [view.superview addSubview:view positioned:NSWindowAbove relativeTo:nil];
+        if (view.superview.subviews.lastObject != view) {
+            [view.superview addSubview:view positioned:NSWindowAbove relativeTo:nil];
+        }
         view.hidden = NO;
         [CATransaction commit];
     }
@@ -75,6 +90,10 @@ void MacWindow::tabletCursor(SDL_Window* window, const unsigned char* pixels, un
 
 void MacWindow::hideTabletCursor(SDL_Window* window)
 {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ hideTabletCursor(window); });
+        return;
+    }
     @autoreleasepool { tabletView(window, false).hidden = YES; }
 }
 
