@@ -5,6 +5,7 @@
 #include "settings/streamingpreferences.h"
 #include "streaming/avsynccontroller.h"
 #include "streaming/plankdisplaymode.h"
+#include "streaming/plankdisplaytransition.h"
 #include "streaming/planktoolbar.h"
 #include "streaming/streamutils.h"
 #include "streaming/input/plankmousemotion.h"
@@ -2930,29 +2931,29 @@ bool Session::startConnectionAsync(bool reconnecting,
                           acceptedEncodingMode,
                           m_ResolvedPrimaryOutput);
         };
-        try {
-            startApp();
-        } catch (const GfeHttpResponseException& e) {
-            const QString statusMessage = QString::fromUtf8(e.getStatusMessage());
-            const bool displayTransitionStarted =
-                    m_Computer->plankAuthentication &&
-                    ((e.getStatusCode() == 425 &&
-                      statusMessage ==
-                          QStringLiteral("PLANK host display transition started")) ||
-                     (takeOverActiveSession &&
-                      e.getStatusCode() == 503 &&
-                      statusMessage ==
-                          QStringLiteral("Host display layout transition is currently unavailable")));
-            const bool activeSessionConflict =
-                    m_Computer->plankAuthentication &&
-                    e.getStatusCode() == 409 &&
-                    QString::fromUtf8(e.getStatusMessage()) ==
-                        QStringLiteral("PLANK workstation session is active");
-            if (displayTransitionStarted) {
+        const auto transientDisplayWorkerDrop = [](const QtNetworkReplyException& error) {
+            switch (error.getError()) {
+            case QNetworkReply::ConnectionRefusedError:
+            case QNetworkReply::RemoteHostClosedError:
+            case QNetworkReply::TimeoutError:
+            case QNetworkReply::TemporaryNetworkFailureError:
+            case QNetworkReply::NetworkSessionFailedError:
+            case QNetworkReply::UnknownNetworkError:
+                return true;
+            default:
+                return false;
+            }
+        };
+        bool displayTransitionSubmitted = false;
+        const auto waitForReplacementWorkerAndLaunch = [&]() -> bool {
                 constexpr int RetryIntervalMs = 500;
                 constexpr int MaximumWaitMs = 45000;
                 constexpr int CancellationPollMs = 50;
                 bool started = false;
+                PlankDisplayTransitionLaunch transition;
+                if (displayTransitionSubmitted) {
+                    transition.noteSubmitted(0);
+                }
 
                 if (m_PlankUsername.isEmpty() ||
                         m_PlankPassword.isEmpty()) {
@@ -2961,7 +2962,9 @@ bool Session::startConnectionAsync(bool reconnecting,
                 m_WaitingForSessionCleanup.store(true);
                 emit sessionCleanupWaitChanged(
                             true,
-                            tr("Applying workstation display layout..."));
+                            m_ReachedUserDesktop.load() ?
+                                tr("Applying workstation display layout...") :
+                                tr("Opening your desktop..."));
                 qInfo() << "PLANK host display transition started; waiting up to"
                         << MaximumWaitMs << "ms";
                 bool authenticationRefreshRequired = false;
@@ -3037,9 +3040,29 @@ bool Session::startConnectionAsync(bool reconnecting,
                             emit sessionCleanupWaitChanged(false, QString());
                             return false;
                         }
-                        if (!topology.matchesRequestedHostLayout(
+                        const bool layoutMatches = topology.matchesRequestedHostLayout(
                                     m_ResolvedHostLayout,
-                                    m_ResolvedVirtualModes)) {
+                                    m_ResolvedVirtualModes);
+                        if (!layoutMatches) {
+                            qInfo() << "PLANK display worker is up on"
+                                    << topology.layoutKind << topology.virtualModes
+                                    << "; requested"
+                                    << m_ResolvedHostLayout << m_ResolvedVirtualModes;
+                        }
+                        if (reconnecting && m_ReachedUserDesktop.load() && !layoutMatches) {
+                            // Logout left seat0 on GDM. start_desktop is false,
+                            // so this 425 wait will never become a user desktop.
+                            qInfo() << "PLANK reconnect stopped on the sign-in layout after the desktop was open";
+                            m_LogoutReturnedToLogin.store(true);
+                            m_ReconnectGreeterConfirmed.store(true);
+                            m_ReconnectCancelled.store(true);
+                            m_WaitingForSessionCleanup.store(false);
+                            emit sessionCleanupWaitChanged(false, QString());
+                            return false;
+                        }
+                        if (transition.decide(layoutMatches, true,
+                                              static_cast<std::uint64_t>(elapsedMs)) ==
+                                PlankDisplayTransitionLaunch::Action::Wait) {
                             qInfo() << "PLANK display transition is still pending:"
                                     << topology.layoutKind << topology.virtualModes;
                             continue;
@@ -3064,6 +3087,9 @@ bool Session::startConnectionAsync(bool reconnecting,
                             emit sessionCleanupWaitChanged(false, QString());
                             throw;
                         }
+                        if (retryError.getStatusCode() == 425) {
+                            transition.noteSubmitted(static_cast<std::uint64_t>(elapsedMs));
+                        }
                         qInfo() << "PLANK display transition wait attempt failed:"
                                 << retryError.toQString();
                     } catch (const QtNetworkReplyException& retryError) {
@@ -3087,6 +3113,35 @@ bool Session::startConnectionAsync(bool reconnecting,
                     return false;
                 }
                 qInfo() << "PLANK display transition completed; launch succeeded";
+            return true;
+        };
+        try {
+            startApp();
+        } catch (const GfeHttpResponseException& e) {
+            const QString statusMessage = QString::fromUtf8(e.getStatusMessage());
+            const bool displayTransitionStarted =
+                    m_Computer->plankAuthentication &&
+                    ((e.getStatusCode() == 425 &&
+                      statusMessage ==
+                          QStringLiteral("PLANK host display transition started")) ||
+                     (takeOverActiveSession &&
+                      e.getStatusCode() == 503 &&
+                      statusMessage ==
+                          QStringLiteral("Host display layout transition is currently unavailable")));
+            const bool activeSessionConflict =
+                    m_Computer->plankAuthentication &&
+                    e.getStatusCode() == 409 &&
+                    QString::fromUtf8(e.getStatusMessage()) ==
+                        QStringLiteral("PLANK workstation session is active");
+            if (displayTransitionStarted) {
+                if (m_PlankUsername.isEmpty() ||
+                        m_PlankPassword.isEmpty()) {
+                    throw;
+                }
+                displayTransitionSubmitted = true;
+                if (!waitForReplacementWorkerAndLaunch()) {
+                    return false;
+                }
             }
             else if (activeSessionConflict) {
                 if (reconnecting) {
@@ -3174,6 +3229,24 @@ bool Session::startConnectionAsync(bool reconnecting,
                         << topology.generation << m_StreamConfig.width
                         << m_StreamConfig.height;
                 startApp();
+            }
+        } catch (const QtNetworkReplyException& e) {
+            // Skip-GDM replaces the greeter worker after PAM. The first
+            // launch can see Error 99 / connection refused before the user
+            // desktop worker is listening.
+            if (!m_Computer->plankAuthentication ||
+                    e.getError() == QNetworkReply::SslHandshakeFailedError ||
+                    !transientDisplayWorkerDrop(e)) {
+                throw;
+            }
+            qInfo() << "PLANK launch lost the display worker during a session start; waiting:"
+                    << e.toQString();
+            if (m_PlankUsername.isEmpty() ||
+                    m_PlankPassword.isEmpty()) {
+                throw;
+            }
+            if (!waitForReplacementWorkerAndLaunch()) {
+                return false;
             }
         }
 
@@ -3376,7 +3449,9 @@ bool Session::beginPlankReconnect(
     m_Reconnecting.store(true);
     m_ReconnectGreeterConfirmed.store(false);
     m_LogoutReturnedToLogin.store(false);
-    const bool openingDesktop = m_DesktopHandoffNoticeDeadline.exchange(0) > SDL_GetTicks();
+    const bool noticedHandoff =
+            m_DesktopHandoffNoticeDeadline.exchange(0) > SDL_GetTicks();
+    const bool openingDesktop = !m_ReachedUserDesktop.load() || noticedHandoff;
     setPlankReconnectStatus(
                 openingDesktop ? "Opening your desktop..." : "Waiting for workstation...", false);
 
@@ -4248,6 +4323,7 @@ void Session::execInternal()
         case SDL_CODE_PLANK_TABLET_CURSOR:
             if (m_InputHandler != nullptr) {
                 m_InputHandler->applyPendingTabletCursorActivation();
+                m_InputHandler->applyPendingLocalTabletHint();
             }
             return true;
         case SDL_CODE_PLANK_CURSOR_POSITION:
@@ -4309,7 +4385,11 @@ void Session::execInternal()
         if (!m_Reconnecting.load() && !m_ReconnectRequested.load()) {
             if (videoSilent && m_CanReconnect.load() && !m_PlankWorkerInstance.isEmpty()) {
                 if (!earlyWaitingVisible) {
-                    setPlankReconnectStatus("Waiting for workstation...", false);
+                    setPlankReconnectStatus(
+                                m_ReachedUserDesktop.load() ?
+                                    "Waiting for workstation..." :
+                                    "Opening your desktop...",
+                                false);
                     earlyWaitingVisible = true;
                 }
                 if (workerProbe == nullptr && now >= nextWorkerProbe) {
