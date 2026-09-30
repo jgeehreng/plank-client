@@ -400,6 +400,42 @@ Flickable {
                 }
 
                 PlankSettingLabel {
+                    text: qsTr("Broadcast monitor")
+                    visible: SystemProperties.hasDesktopEnvironment
+                }
+
+                AutoResizingComboBox {
+                    id: broadcastMonitorComboBox
+                    Layout.fillWidth: true
+                    visible: SystemProperties.hasDesktopEnvironment
+                    textRole: "text"
+                    function reinitialize() {
+                        if (!visible) return
+                        var choices = StreamingPreferences.localMonitors()
+                        var choiceModel = Qt.createQmlObject('import QtQuick 2.0; ListModel {}', parent, '')
+                        var saved = StreamingPreferences.broadcastMonitorGeometry
+                        var selected = 0
+                        for (var i = 0; i < choices.length; i++) {
+                            choiceModel.append({
+                                             text: choices[i].text,
+                                             geometry: choices[i].geometry
+                                         })
+                            if (choices[i].geometry === saved) selected = i
+                        }
+                        model = choiceModel
+                        currentIndex = selected
+                    }
+                    Component.onCompleted: reinitialize()
+                    onActivated: {
+                        StreamingPreferences.broadcastMonitorGeometry = model.get(currentIndex).geometry
+                    }
+                    ToolTip.delay: 1000
+                    ToolTip.timeout: 5000
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("This monitor shows the Flame NDI picture through UltraGrid. The other monitors stay the remote desktop.")
+                }
+
+                PlankSettingLabel {
                     text: qsTr("V-Sync")
                 }
 

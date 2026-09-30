@@ -209,6 +209,9 @@ private:
     bool startConnectionAsync(bool reconnecting = false,
                               bool takeOverActiveSession = false);
 
+    void startBroadcastMonitor();
+    void stopBroadcastMonitor();
+
     struct PlankReconnectState {
         bool retainedRenderer = false;
         bool inputCaptureWasActive = false;
@@ -441,6 +444,8 @@ private:
         QRect canvasRect;
     };
     QVector<ClientDisplaySnapshot> m_ClientDisplays;
+    int m_BroadcastDisplayIndex = -1;
+    class QProcess* m_BroadcastProcess = nullptr;
     SDL_DisplayID m_TargetDisplayId = 0;
     bool m_MultiDisplayPresentationAvailable = false;
     bool m_UseMultiDisplayPresentation = false;

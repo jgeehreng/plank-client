@@ -1,7 +1,10 @@
 #include "streamingpreferences.h"
 #include "backend/planknetwork.h"
 #include "plankclientpolicy.h"
+#include <QGuiApplication>
+#include <QScreen>
 #include <QSettings>
+#include <QVariantMap>
 #include <QTranslator>
 #include <QCoreApplication>
 #include <QLocale>
@@ -25,6 +28,7 @@
 #define SER_CAPTURESYSKEYS "capturesyskeys"
 #define SER_KEEPAWAKE "keepawake"
 #define SER_LANGUAGE "language"
+#define SER_BROADCAST_MONITOR "broadcast-monitor"
 
 static StreamingPreferences* s_GlobalPrefs;
 static QReadWriteLock s_GlobalPrefsLock;
@@ -116,6 +120,7 @@ void StreamingPreferences::reload()
                                                          static_cast<int>(CaptureSysKeysMode::CSK_ALWAYS)).toInt());
     audioConfig = static_cast<AudioConfig>(settings.value(SER_AUDIOCFG,
                                                   static_cast<int>(AudioConfig::AC_STEREO)).toInt());
+    broadcastMonitorGeometry = settings.value(SER_BROADCAST_MONITOR).toString();
     windowMode = static_cast<WindowMode>(settings.value(SER_WINDOWMODE,
                                                         static_cast<int>(recommendedFullScreenMode)).toInt());
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
@@ -241,6 +246,32 @@ QString StreamingPreferences::getSuffixFromLanguage(StreamingPreferences::Langua
     }
 }
 
+QVariantList StreamingPreferences::localMonitors() const
+{
+    QVariantList monitors;
+    QVariantMap none;
+    none.insert(QStringLiteral("text"), tr("None"));
+    none.insert(QStringLiteral("geometry"), QString());
+    monitors.append(none);
+    const auto screens = QGuiApplication::screens();
+    for (int index = 0; index < screens.size(); ++index) {
+        QScreen* screen = screens.at(index);
+        const QRect bounds = screen->geometry();
+        QVariantMap entry;
+        entry.insert(QStringLiteral("text"),
+                     tr("Monitor %1 (%2x%3)")
+                     .arg(index + 1)
+                     .arg(bounds.width())
+                     .arg(bounds.height()));
+        entry.insert(QStringLiteral("geometry"),
+                     QStringLiteral("%1,%2,%3,%4")
+                     .arg(bounds.x()).arg(bounds.y())
+                     .arg(bounds.width()).arg(bounds.height()));
+        monitors.append(entry);
+    }
+    return monitors;
+}
+
 void StreamingPreferences::save()
 {
     QSettings settings;
@@ -261,6 +292,7 @@ void StreamingPreferences::save()
     settings.setValue(SER_AUDIOCFG, static_cast<int>(audioConfig));
     settings.setValue(SER_PLANK_TOOLBAR_PINNED, plankToolbarPinned);
     settings.setValue(SER_WINDOWMODE, static_cast<int>(windowMode));
+    settings.setValue(SER_BROADCAST_MONITOR, broadcastMonitorGeometry);
     settings.setValue(SER_LANGUAGE, static_cast<int>(language));
     settings.setValue(SER_MUTEONFOCUSLOSS, muteOnFocusLoss);
     settings.setValue(SER_CAPTURESYSKEYS, captureSysKeysMode);

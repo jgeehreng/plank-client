@@ -277,6 +277,7 @@ public:
     Q_PROPERTY(AudioConfig audioConfig MEMBER audioConfig NOTIFY audioConfigChanged)
     Q_PROPERTY(bool plankToolbarPinned MEMBER plankToolbarPinned NOTIFY plankToolbarPinnedChanged)
     Q_PROPERTY(WindowMode windowMode MEMBER windowMode NOTIFY windowModeChanged)
+    Q_PROPERTY(QString broadcastMonitorGeometry MEMBER broadcastMonitorGeometry NOTIFY broadcastMonitorChanged)
     Q_PROPERTY(WindowMode recommendedFullScreenMode MEMBER recommendedFullScreenMode CONSTANT)
     Q_PROPERTY(bool muteOnFocusLoss MEMBER muteOnFocusLoss NOTIFY muteOnFocusLossChanged)
     Q_PROPERTY(bool keepAwake MEMBER keepAwake NOTIFY keepAwakeChanged)
@@ -305,6 +306,7 @@ public:
     {
         return PlankBitrateStepKbps;
     }
+    Q_INVOKABLE QVariantList localMonitors() const;
     Q_INVOKABLE bool plankVirtualModeSupportedForProfile(
             QString mode, int profile) const
     {
@@ -329,6 +331,7 @@ public:
     int identityGbrBitDepth;
     bool plankToolbarPinned;
     WindowMode windowMode;
+    QString broadcastMonitorGeometry;
     WindowMode recommendedFullScreenMode;
     Language language;
     CaptureSysKeysMode captureSysKeysMode;
@@ -342,6 +345,7 @@ signals:
     void audioConfigChanged();
     void plankToolbarPinnedChanged();
     void windowModeChanged();
+    void broadcastMonitorChanged();
     void connectionWarningsChanged();
     void quicUdpPayloadMtuChanged();
     void plankUnreachableTimeoutChanged();

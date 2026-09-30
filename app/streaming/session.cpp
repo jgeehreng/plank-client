@@ -74,6 +74,8 @@
 #include <QWindow>
 #include <QScreen>
 #include <QHostAddress>
+#include <QProcess>
+#include <QUdpSocket>
 #include <QHostInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -147,6 +149,7 @@ void Session::clStageFailed(int stage, int errorCode)
 
 void Session::clConnectionTerminated(int errorCode)
 {
+    if (s_ActiveSession != nullptr) s_ActiveSession->stopBroadcastMonitor();
     if (static_cast<std::uint32_t>(errorCode) ==
             PLANK_TRANSPORT_TERMINATION_SESSION_TAKEN_OVER) {
         s_ActiveSession->m_CanReconnect.store(false);
@@ -763,6 +766,7 @@ Session::Session(NvComputer* computer, NvApp& app,
 
 Session::~Session()
 {
+    stopBroadcastMonitor();
     stopPlankTransportDataPlane();
     clearPlankReconnectCredentials();
 }
@@ -1966,6 +1970,7 @@ int Session::getTargetDisplayIndex() const
 bool Session::snapshotClientDisplays()
 {
     m_ClientDisplays.clear();
+    m_BroadcastDisplayIndex = -1;
 #ifdef Q_OS_DARWIN
     bool matchMacDesktop;
     {
@@ -2009,6 +2014,28 @@ bool Session::snapshotClientDisplays()
         }
 #endif
         m_ClientDisplays.append(snapshot);
+        const QRect bounds(snapshot.logicalBounds.x, snapshot.logicalBounds.y,
+                           snapshot.logicalBounds.w, snapshot.logicalBounds.h);
+        const QString geometry = QStringLiteral("%1,%2,%3,%4")
+                .arg(bounds.x()).arg(bounds.y()).arg(bounds.width()).arg(bounds.height());
+        if (geometry == StreamingPreferences::get()->broadcastMonitorGeometry) {
+            m_BroadcastDisplayIndex = index;
+        }
+    }
+
+    if (m_BroadcastDisplayIndex >= 0 && m_ClientDisplays.size() > 1) {
+        for (int position = 0; position < m_ClientDisplays.size(); ++position) {
+            if (m_ClientDisplays.at(position).displayId ==
+                    StreamUtils::getDisplayId(m_BroadcastDisplayIndex)) {
+                m_ClientDisplays.removeAt(position);
+                break;
+            }
+        }
+    }
+    else if (m_BroadcastDisplayIndex >= 0) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                    "Broadcast monitor needs another local monitor for the PLANK desktop");
+        m_BroadcastDisplayIndex = -1;
     }
 
     std::sort(m_ClientDisplays.begin(), m_ClientDisplays.end(),
@@ -3311,8 +3338,76 @@ bool Session::startConnectionAsync(bool reconnecting,
         return false;
     }
 
+    startBroadcastMonitor();
     emit connectionStarted();
     return true;
+}
+
+void Session::stopBroadcastMonitor()
+{
+    if (m_BroadcastProcess == nullptr) return;
+    m_BroadcastProcess->terminate();
+    if (!m_BroadcastProcess->waitForFinished(1000)) m_BroadcastProcess->kill();
+    m_BroadcastProcess->deleteLater();
+    m_BroadcastProcess = nullptr;
+}
+
+void Session::startBroadcastMonitor()
+{
+    stopBroadcastMonitor();
+    if (m_BroadcastDisplayIndex < 0 || m_Computer == nullptr || !m_Computer->broadcastSource) return;
+#ifdef PLANK_TRANSPORT
+    if (m_PlankTransportEndpoint == nullptr) return;
+    QHostAddress remote(m_Computer->activeAddress.address());
+    if (remote.isNull()) return;
+    QUdpSocket probe;
+    probe.connectToHost(remote, m_Computer->activeAddress.port());
+    probe.waitForConnected(1000);
+    const QHostAddress local = probe.localAddress();
+    if (local.protocol() != QAbstractSocket::IPv4Protocol) {
+        qWarning() << "UltraGrid receive address is not IPv4";
+        return;
+    }
+    constexpr quint16 videoPort = 5004;
+    const quint32 ipv4 = local.toIPv4Address();
+    const uint32_t values[2] = {ipv4, videoPort};
+    unsigned char packet[PLANK_TRANSPORT_CONTROL_MAX_PACKET_SIZE];
+    size_t packetSize = 0;
+#if defined(Q_OS_LINUX)
+    const QString display = QStringLiteral("vulkan:fs:display=%1").arg(m_BroadcastDisplayIndex);
+    const QString audio = QStringLiteral("pipewire");
+#elif defined(Q_OS_MACOS)
+    const QString display = QStringLiteral("gl:fs:display=%1").arg(m_BroadcastDisplayIndex);
+    const QString audio = QStringLiteral("coreaudio");
+#else
+    return;
+#endif
+    auto* process = new QProcess(this);
+    process->setProgram(QStringLiteral("uv"));
+    process->setArguments({
+        QStringLiteral("-d"), display,
+        QStringLiteral("-r"), audio,
+        QStringLiteral("-P"), QStringLiteral("5004:41004:5006:41006"),
+        m_Computer->activeAddress.address()
+    });
+    process->start();
+    if (!process->waitForStarted(2000)) {
+        qWarning() << "UltraGrid receiver did not start";
+        process->deleteLater();
+        return;
+    }
+    m_BroadcastProcess = process;
+    if (plank_transport_control_encode(
+                PLANK_TRANSPORT_CONTROL_BROADCAST_RECEIVE, values, 2,
+                packet, sizeof(packet), &packetSize) != 0 ||
+            plank_transport_native_data_send(
+                m_PlankTransportEndpoint, packet, packetSize) != PLANK_TRANSPORT_OK) {
+        qWarning() << "Unable to tell the host where to send UltraGrid";
+        stopBroadcastMonitor();
+    }
+#else
+    Q_UNUSED(m_BroadcastDisplayIndex);
+#endif
 }
 
 void Session::cancelConnectionStart()

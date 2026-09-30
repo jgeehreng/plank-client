@@ -16,6 +16,7 @@
 #include <QSslKey>
 #include <QSslCipher>
 #include <QImageReader>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -27,6 +28,41 @@
 #define RESUME_TIMEOUT_MS 30000
 
 namespace {
+struct AdmissionMemory {
+    bool set = false;
+    QJsonObject wrapper;
+    QString uniqueId;
+    QString certificateSha256;
+};
+
+AdmissionMemory g_admission;
+
+void loadAdmissionFromEnvironment()
+{
+    if (g_admission.set) return;
+    const QByteArray path = qgetenv("PLANK_ADMISSION_BUNDLE");
+    if (path.isEmpty()) return;
+    QFile file(QString::fromLocal8Bit(path));
+    if (!file.open(QIODevice::ReadOnly)) {
+        throw GfeHttpResponseException(400, "PLANK admission bundle is unavailable");
+    }
+    const QByteArray bytes = file.readAll();
+    file.close();
+    const QJsonDocument document = QJsonDocument::fromJson(bytes);
+    const QJsonObject root = document.object();
+    const QJsonObject admission = root.value(QStringLiteral("admission")).toObject();
+    const QString uniqueId = root.value(QStringLiteral("workstation_uniqueid")).toString();
+    if (!document.isObject() || admission.value(QStringLiteral("v")).toInt() != 1 ||
+            !admission.value(QStringLiteral("payload")).isString() ||
+            !admission.value(QStringLiteral("sig")).isString() || uniqueId.size() != 36) {
+        throw GfeHttpResponseException(400, "PLANK admission bundle is unavailable");
+    }
+    g_admission.set = true;
+    g_admission.wrapper = admission;
+    g_admission.uniqueId = uniqueId;
+    g_admission.certificateSha256 = root.value(QStringLiteral("certificate_sha256")).toString().toLower();
+}
+
 class SecureStringGuard
 {
 public:
@@ -638,6 +674,15 @@ bool NvHTTP::probeWorkerReplacement(const QString& instance, const QString& cert
                 QByteArray::fromHex(certificateSha256.toLatin1()), certificate);
 }
 
+void NvHTTP::setAdmissionBundle(const QJsonObject& admission, const QString& workstationUniqueId,
+                                 const QString& certificateSha256)
+{
+    g_admission.set = true;
+    g_admission.wrapper = admission;
+    g_admission.uniqueId = workstationUniqueId;
+    g_admission.certificateSha256 = certificateSha256.toLower();
+}
+
 QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed,
                              bool startDesktop)
 {
@@ -646,11 +691,38 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
     if (!m_SessionToken.isEmpty() || username.isEmpty()) {
         throw GfeHttpResponseException(400, "Invalid PLANK authentication state");
     }
+    loadAdmissionFromEnvironment();
 
-    QJsonObject result = postPlankJson("start", {
+    QJsonObject startBody {
         {"username", username},
         {"start_desktop", startDesktop},
-    });
+    };
+    if (g_admission.set) {
+        QNetworkReply* reply = openConnection(m_BaseUrlHttps, "serverinfo", nullptr,
+                                              REQUEST_TIMEOUT_MS, NvLogLevel::NVLL_NONE);
+        const QString certificate = QString::fromLatin1(reply->sslConfiguration().peerCertificate()
+                .digest(QCryptographicHash::Sha256).toHex());
+        QString serverInfo;
+        {
+            QTextStream stream(reply);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            stream.setEncoding(QStringConverter::Utf8);
+#else
+            stream.setCodec("UTF-8");
+#endif
+            serverInfo = stream.readAll();
+        }
+        delete reply;
+        verifyResponseStatus(serverInfo);
+        if (getXmlString(serverInfo, QStringLiteral("uniqueid")) != g_admission.uniqueId ||
+                (!g_admission.certificateSha256.isEmpty() &&
+                 certificate.toLower() != g_admission.certificateSha256)) {
+            throw GfeHttpResponseException(401, "PLANK host identity does not match the admission");
+        }
+        startBody.insert(QStringLiteral("admission"), g_admission.wrapper);
+    }
+
+    QJsonObject result = postPlankJson("start", startBody);
     for (int round = 0; round < 16; ++round) {
         const QString state = result.value("state").toString();
         if (state == "authenticated") {
@@ -665,6 +737,9 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         }
         if (state == "denied") {
             throw GfeHttpResponseException(401, "Operating-system authentication failed");
+        }
+        if (state == "admission_rejected") {
+            throw GfeHttpResponseException(401, "PLANK admission rejected");
         }
         if (state == "busy") {
             throw GfeHttpResponseException(503, "Host authentication is busy. Please try again shortly.");

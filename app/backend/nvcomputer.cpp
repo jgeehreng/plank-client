@@ -101,6 +101,7 @@ bool NvComputer::updateManualBookmark(NvAddress address, QString nickname,
         plankHostVersion.clear();
         plankTopologyVersion = 0;
         plankFeatureFlags = 0;
+        broadcastSource = false;
         displayModes.clear();
         serverCodecModeSupport = 0;
         appVersion.clear();
@@ -385,6 +386,7 @@ NvComputer::NvComputer(NvHTTP& http, QString serverInfo)
                 AS_AUTHORIZED : AS_UNAUTHORIZED;
     this->currentGameId = NvHTTP::getCurrentGame(serverInfo);
     this->plankOccupied = NvHTTP::getPlankOccupied(serverInfo);
+    this->broadcastSource = NvHTTP::getXmlString(serverInfo, "BroadcastSource") == "1";
     this->plankSessionUser = this->plankOccupied ?
                 NvHTTP::getPlankSessionUser(serverInfo) : QString();
     this->appVersion = NvHTTP::getXmlString(serverInfo, "appversion");
