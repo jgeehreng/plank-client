@@ -121,6 +121,7 @@ public:
     NvAddress activeAddress;
     int currentGameId;
     bool plankOccupied = false;
+    bool broadcastSource = false;
     QString plankSessionUser;
     QString appVersion;
     QVector<NvDisplayMode> displayModes;
