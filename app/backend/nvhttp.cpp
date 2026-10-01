@@ -630,6 +630,9 @@ QJsonObject NvHTTP::postPlankJson(QString command, const QJsonObject& body)
         throw GfeHttpResponseException(400, "Invalid PLANK authentication state");
     }
 
+    // /serverinfo leaves a TLS connection the Host has already closed. Reusing
+    // it makes this POST fail before the Host reads the admission.
+    m_Nam->clearAccessCache();
     QUrl url(m_BaseUrlHttps);
     url.setPath("/plank/auth/" + command);
     QNetworkRequest request(url);
