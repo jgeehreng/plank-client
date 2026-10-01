@@ -37,6 +37,26 @@ struct AdmissionMemory {
 
 AdmissionMemory g_admission;
 
+bool sameWorkstationUuid(const QString& left, const QString& right)
+{
+    if (left.size() != 36 || right.size() != 36) return false;
+    for (int i = 0; i < 36; ++i) {
+        const bool hyphen = i == 8 || i == 13 || i == 18 || i == 23;
+        const QChar a = left.at(i);
+        const QChar b = right.at(i);
+        if (hyphen) {
+            if (a != QLatin1Char('-') || b != QLatin1Char('-')) return false;
+            continue;
+        }
+        const char ca = a.toLower().toLatin1();
+        const char cb = b.toLower().toLatin1();
+        const bool hexA = (ca >= '0' && ca <= '9') || (ca >= 'a' && ca <= 'f');
+        const bool hexB = (cb >= '0' && cb <= '9') || (cb >= 'a' && cb <= 'f');
+        if (!hexA || !hexB || ca != cb) return false;
+    }
+    return true;
+}
+
 void loadAdmissionFromEnvironment()
 {
     if (g_admission.set) return;
@@ -714,7 +734,8 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         }
         delete reply;
         verifyResponseStatus(serverInfo);
-        if (getXmlString(serverInfo, QStringLiteral("uniqueid")) != g_admission.uniqueId ||
+        if (!sameWorkstationUuid(getXmlString(serverInfo, QStringLiteral("uniqueid")),
+                                  g_admission.uniqueId) ||
                 (!g_admission.certificateSha256.isEmpty() &&
                  certificate.toLower() != g_admission.certificateSha256)) {
             throw GfeHttpResponseException(401, "PLANK host identity does not match the admission");
