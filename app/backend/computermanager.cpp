@@ -123,6 +123,7 @@ private:
         http.setPlankSessionToken(sessionToken, sessionIdentity);
 
         QString serverInfo;
+        NvComputer newState;
         try {
             serverInfo = http.getServerInfo(NvHTTP::NvLogLevel::NVLL_NONE, true);
         } catch (const QtNetworkReplyException& error) {
@@ -143,7 +144,13 @@ private:
             return false;
         }
 
-        NvComputer newState(http, serverInfo);
+        try {
+            newState = NvComputer(http, serverInfo);
+        } catch (...) {
+            // Uppercut: a broker relay endpoint advertises the host's own
+            // control port, which the direct-dial constructor rejects.
+            return false;
+        }
 
         if (!newState.plankAuthentication) {
             return false;
@@ -770,9 +777,16 @@ private:
             NvAddress trustAddress;
             {
                 QReadLocker lock(&m_Computer->lock);
-                address = m_Computer->activeAddress;
-                trustAddress = m_Computer->manualAddress.isNull() ? address : m_Computer->manualAddress;
+                // Uppercut: a bookmark that has never been seen online still
+                // has its saved address, so sign-in can reach it (or the broker).
+                address = m_Computer->activeAddress.isNull()
+                        ? m_Computer->manualAddress : m_Computer->activeAddress;
+                trustAddress = m_Computer->manualAddress;
             }
+            if (address.port() == 0 && !address.address().isEmpty()) {
+                address.setPort(28989);
+            }
+            if (trustAddress.isNull()) trustAddress = address;
             NvHTTP http(address);
             http.setTrustAddress(trustAddress);
             if (m_TrustDecision) http.setTrustPrompt([this](const HostIdentityChangedException& change) {
@@ -783,14 +797,33 @@ private:
             });
             bool greeter = false;
             const QString token = http.authenticate(m_Username, m_Password, &greeter);
-            NvComputer authenticated(http, http.getServerInfo(NvHTTP::NVLL_NONE));
-            {
-                QWriteLocker lock(&m_Computer->lock);
-                if (m_Computer->manualBookmark) m_Computer->serverUuid = authenticated.uuid;
+            const NvAddress connected = http.address();
+            const QString serverInfo = http.getServerInfo(NvHTTP::NVLL_NONE);
+            if (connected == address) {
+                // Direct connection: full identity check and update.
+                NvComputer authenticated(http, serverInfo);
+                {
+                    QWriteLocker lock(&m_Computer->lock);
+                    if (m_Computer->manualBookmark) m_Computer->serverUuid = authenticated.uuid;
+                }
+                if (!m_Computer->acceptsServerUuid(authenticated.uuid))
+                    throw GfeHttpResponseException(409, "Workstation identity changed. Recreate its bookmark.");
+                m_Computer->update(authenticated, address);
             }
-            if (!m_Computer->acceptsServerUuid(authenticated.uuid))
-                throw GfeHttpResponseException(409, "Workstation identity changed. Recreate its bookmark.");
-            m_Computer->update(authenticated, address);
+            else {
+                // Uppercut broker relay: the relay port differs from the host's
+                // own control port, which the direct-dial NvComputer constructor
+                // rejects. The admission already pinned the workstation id and
+                // certificate; apply the same identity rule as above.
+                const QString hostId = NvHTTP::getXmlString(serverInfo, "uniqueid");
+                {
+                    QWriteLocker lock(&m_Computer->lock);
+                    if (m_Computer->manualBookmark && !hostId.isEmpty()) m_Computer->serverUuid = hostId;
+                }
+                if (hostId.isEmpty() || !m_Computer->acceptsServerUuid(hostId))
+                    throw GfeHttpResponseException(409, "Workstation identity changed. Recreate its bookmark.");
+                m_Computer->applyServerMetadata(serverInfo);
+            }
             NvOutputTopology topology;
             bool topologySupported;
             bool macDesktop;
@@ -828,6 +861,10 @@ private:
             m_Password.clear();
             {
                 QWriteLocker lock(&m_Computer->lock);
+                if (connected != address) {
+                    m_Computer->activeAddress = connected;
+                    m_Computer->state = NvComputer::CS_ONLINE;
+                }
                 m_Computer->sessionToken = token;
                 m_Computer->sessionIdentityKey = http.hostIdentityKey();
                 m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;

@@ -820,9 +820,18 @@ bool Session::startPlankTransportDataPlane(quint16 port,
         return false;
     }
 
+    // QUIC shares the host's HTTPS port. A broker relay presents one dialed
+    // port for both, and forwards it to the port the host advertised.
+    const quint16 dialPort = m_Computer->activeAddress.port();
+    const quint16 endpointPort = dialPort != 0 ? dialPort : port;
+    if (endpointPort != port) {
+        qInfo() << "PLANK data plane uses the dialed control port" << endpointPort
+                << "for host transport port" << port;
+    }
+
     const QString remoteAddress = remoteHost.protocol() == QAbstractSocket::IPv6Protocol ?
-                QStringLiteral("[%1]:%2").arg(remoteHost.toString()).arg(port) :
-                QStringLiteral("%1:%2").arg(remoteHost.toString()).arg(port);
+                QStringLiteral("[%1]:%2").arg(remoteHost.toString()).arg(endpointPort) :
+                QStringLiteral("%1:%2").arg(remoteHost.toString()).arg(endpointPort);
     const QByteArray remoteAddressUtf8 = remoteAddress.toUtf8();
     const QByteArray serverNameUtf8("plank");
     const QByteArray certificateUtf8 = certificateSha256.toLatin1();
@@ -876,7 +885,7 @@ bool Session::startPlankTransportDataPlane(quint16 port,
     LiSetPlankNativeInputSender(
                 &Session::plankTransportNativeInputSender, endpoint);
     qInfo() << "Experimental native KyProto media, input, and data protocols are ready on UDP"
-            << port;
+            << endpointPort;
     return true;
 #endif
 }
@@ -3040,11 +3049,16 @@ bool Session::startConnectionAsync(bool reconnecting,
                                     &greeterConfirmed,
                                     NvHTTP::AuthenticationIntent::Recovery,
                                     !m_ReachedUserDesktop.load());
+                        const NvAddress routed = http->address();
                         {
                             QWriteLocker lock(&m_Computer->lock);
                             m_Computer->sessionToken = token;
                             m_Computer->sessionIdentityKey = http->hostIdentityKey();
                             m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
+                            if (m_Computer->activeAddress != routed) {
+                                m_Computer->activeAddress = routed;
+                                m_Computer->state = NvComputer::CS_ONLINE;
+                            }
                         }
                         if (greeterConfirmed && m_ReachedUserDesktop.load()) {
                             qInfo() << "PLANK replacement worker is the sign-in screen after logout";
@@ -3638,11 +3652,16 @@ bool Session::runPlankReconnect()
                                           NvHTTP::AuthenticationIntent::Recovery,
                                           !m_ReachedUserDesktop.load());
                 authenticating = false;
+                const NvAddress routed = http.address();
                 {
                     QWriteLocker lock(&m_Computer->lock);
                     m_Computer->sessionToken = token;
                     m_Computer->sessionIdentityKey = http.hostIdentityKey();
                     m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
+                    if (m_Computer->activeAddress != routed) {
+                        m_Computer->activeAddress = routed;
+                        m_Computer->state = NvComputer::CS_ONLINE;
+                    }
                 }
                 if (greeterConfirmed && m_ReachedUserDesktop.load()) {
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
