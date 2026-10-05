@@ -344,24 +344,29 @@ NvComputer::NvComputer(NvHTTP& http, QString serverInfo)
                 (uint64_t)mode2.width * mode2.height * mode2.refreshRate;
     });
 
-    // We can get an IPv4 loopback address if we're using the GS IPv6 Forwarder
-    this->localAddress = NvAddress(NvHTTP::getXmlString(serverInfo, "LocalIP"), http.controlPort());
-    if (this->localAddress.address().startsWith("127.")) {
-        this->localAddress = NvAddress();
+    // A broker relay dials a different port from the one the host listens on.
+    // Keep the connected address, and use the host's own port only for the
+    // addresses it advertised.
+    uint16_t hostPort = http.controlPort();
+    const QString advertisedControlPort = NvHTTP::getXmlString(serverInfo, "HttpsPort");
+    if (!advertisedControlPort.isEmpty()) {
+        const uint16_t advertised = advertisedControlPort.toUShort();
+        if (advertised != 0) {
+            hostPort = advertised;
+        }
     }
 
-    const QString advertisedControlPort = NvHTTP::getXmlString(serverInfo, "HttpsPort");
-    if (!advertisedControlPort.isEmpty() &&
-            advertisedControlPort.toUShort() != http.controlPort()) {
-        throw GfeHttpResponseException(
-                    400, "Host advertised a different PLANK control port");
+    // We can get an IPv4 loopback address if we're using the GS IPv6 Forwarder
+    this->localAddress = NvAddress(NvHTTP::getXmlString(serverInfo, "LocalIP"), hostPort);
+    if (this->localAddress.address().startsWith("127.")) {
+        this->localAddress = NvAddress();
     }
 
     // This is an extension which is not present in GFE. It is present for Sunshine to be able
     // to support dynamic HTTP WAN ports without requiring the user to manually enter the port.
     QString remotePortStr = NvHTTP::getXmlString(serverInfo, "ExternalPort");
     if (remotePortStr.isEmpty() || (this->externalPort = remotePortStr.toUShort()) == 0) {
-        this->externalPort = http.controlPort();
+        this->externalPort = hostPort;
     }
 
     QString remoteAddress = NvHTTP::getXmlString(serverInfo, "ExternalIP");
@@ -571,6 +576,28 @@ QVector<NvAddress> NvComputer::uniqueAddresses() const
     Q_ASSERT(!uniqueAddressList.isEmpty());
 
     return uniqueAddressList;
+}
+
+void NvComputer::applyServerMetadata(const QString& serverInfo)
+{
+    QWriteLocker writeLocker(&lock);
+    const QString codecSupport = NvHTTP::getXmlString(serverInfo, "ServerCodecModeSupport");
+    serverCodecModeSupport = codecSupport.isEmpty() ? SCM_H264 : codecSupport.toInt();
+    displayModes = NvHTTP::getDisplayModeList(serverInfo);
+    plankAuthentication = NvHTTP::getXmlString(serverInfo, "PlankAuth") == "1";
+    plankHostMetadataVersion = NvHTTP::getXmlString(serverInfo, "PlankHostMetadataVersion").toInt();
+    plankHostVersion = NvHTTP::getXmlString(serverInfo, "PlankHostVersion");
+    plankTopologyVersion = NvHTTP::getXmlString(serverInfo, "PlankTopologyVersion").toInt();
+    plankFeatureFlags = NvHTTP::getXmlString(serverInfo, "PlankFeatureFlags").toInt();
+    currentGameId = NvHTTP::getCurrentGame(serverInfo);
+    plankOccupied = NvHTTP::getPlankOccupied(serverInfo);
+    broadcastSource = NvHTTP::getXmlString(serverInfo, "BroadcastSource") == "1";
+    plankSessionUser = plankOccupied ? NvHTTP::getPlankSessionUser(serverInfo) : QString();
+    appVersion = NvHTTP::getXmlString(serverInfo, "appversion");
+    const QString hostId = NvHTTP::getXmlString(serverInfo, "uniqueid");
+    if (manualBookmark && serverUuid.isEmpty() && !hostId.isEmpty()) {
+        serverUuid = hostId;
+    }
 }
 
 bool NvComputer::update(const NvComputer& that, NvAddress expectedAddress)

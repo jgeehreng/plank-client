@@ -90,6 +90,11 @@ public:
     bool
     isEqualSerialized(const NvComputer& that) const;
 
+    // Copy host capability fields from /serverinfo. Leaves the dialed address
+    // alone so a broker relay port is not replaced by the host's own port.
+    void
+    applyServerMetadata(const QString& serverInfo);
+
     enum AuthorizationState
     {
         AS_UNKNOWN,

@@ -166,6 +166,7 @@ public:
     // Memory-only test admission. Nothing here is written to bookmarks or settings.
     static void setAdmissionBundle(const QJsonObject& admission, const QString& workstationUniqueId,
                                    const QString& certificateSha256 = QString());
+    static bool brokerConfigured();
     bool probeWorkerReplacement(const QString& instance, const QString& certificateSha256);
     QString workerInstance() const { return m_WorkerInstance; }
     NvOutputTopology getOutputTopology(QString* certificateSha256 = nullptr);

@@ -118,13 +118,13 @@ private:
         http.setPlankSessionToken(sessionToken);
 
         QString serverInfo;
+        NvComputer newState;
         try {
             serverInfo = http.getServerInfo(NvHTTP::NvLogLevel::NVLL_NONE, true);
+            newState = NvComputer(http, serverInfo);
         } catch (...) {
             return false;
         }
-
-        NvComputer newState(http, serverInfo);
 
         if (!newState.plankAuthentication) {
             return false;
@@ -708,11 +708,18 @@ private:
             NvAddress address;
             {
                 QReadLocker lock(&m_Computer->lock);
-                address = m_Computer->activeAddress;
+                address = m_Computer->activeAddress.isNull()
+                        ? m_Computer->manualAddress : m_Computer->activeAddress;
+            }
+            if (address.port() == 0 && !address.address().isEmpty()) {
+                address.setPort(28989);
             }
             NvHTTP http(address);
             bool greeter = false;
             const QString token = http.authenticate(m_Username, m_Password, &greeter);
+            const NvAddress connected = http.address();
+            const QString serverInfo = http.getServerInfo(NvHTTP::NvLogLevel::NVLL_NONE);
+            m_Computer->applyServerMetadata(serverInfo);
             NvOutputTopology topology;
             bool topologySupported;
             bool macDesktop;
@@ -736,6 +743,10 @@ private:
             m_Password.clear();
             {
                 QWriteLocker lock(&m_Computer->lock);
+                if (connected != address) {
+                    m_Computer->activeAddress = connected;
+                    m_Computer->state = NvComputer::CS_ONLINE;
+                }
                 m_Computer->sessionToken = token;
                 m_Computer->authorizationState = NvComputer::AS_AUTHORIZED;
                 m_Computer->plankUsername = m_Username.trimmed();

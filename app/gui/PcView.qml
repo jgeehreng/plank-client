@@ -314,7 +314,10 @@ CenteredGridView {
                     loginDialog.pcIndex = index
                     loginDialog.open()
                 }
-            } else if (!model.online) {
+            } else if (plankBrokerConfigured) {
+                loginDialog.pcIndex = index
+                loginDialog.open()
+            } else {
                 // Using open() here because it may be activated by keyboard
                 pcContextMenu.open()
             }

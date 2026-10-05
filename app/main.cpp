@@ -53,6 +53,7 @@
 #include "utils.h"
 #include "gui/computermodel.h"
 #include "backend/computermanager.h"
+#include "backend/nvhttp.h"
 #include <QSslSocket>
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
@@ -978,6 +979,7 @@ int main(int argc, char *argv[])
     }
 
     engine.rootContext()->setContextProperty("initialView", initialView);
+    engine.rootContext()->setContextProperty("plankBrokerConfigured", NvHTTP::brokerConfigured());
     engine.rootContext()->setContextProperty(
                 "runConfigChecks",
                 commandLineParserResult == GlobalCommandLineParser::NormalStartRequested);

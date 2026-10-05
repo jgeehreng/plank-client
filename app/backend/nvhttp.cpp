@@ -16,11 +16,15 @@
 #include <QSslKey>
 #include <QSslCipher>
 #include <QImageReader>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkProxy>
+#include <QNetworkRequest>
+#include <QUuid>
 
 #define FAST_FAIL_TIMEOUT_MS 2000
 #define REQUEST_TIMEOUT_MS 5000
@@ -33,6 +37,11 @@ struct AdmissionMemory {
     QJsonObject wrapper;
     QString uniqueId;
     QString certificateSha256;
+    // Broker ticket already presented to the Host. The next authenticate()
+    // releases this reservation and dials dialedAddress, which is the
+    // workstation address from before the relay rewrite.
+    QString admissionId;
+    QString dialedAddress;
 };
 
 AdmissionMemory g_admission;
@@ -697,6 +706,191 @@ bool NvHTTP::probeWorkerReplacement(const QString& instance, const QString& cert
                 QByteArray::fromHex(certificateSha256.toLatin1()), certificate);
 }
 
+namespace {
+
+bool loopbackBroker(const QUrl& url)
+{
+    if (url.scheme() != QLatin1String("http") || !url.isValid()) {
+        return false;
+    }
+    const QString host = url.host().toLower();
+    return host == QLatin1String("127.0.0.1") ||
+            host == QLatin1String("localhost") ||
+            host == QLatin1String("::1");
+}
+
+QString sessionFilePath()
+{
+    return QDir::homePath() + QStringLiteral("/.local/share/plank-broker/client.session");
+}
+
+bool ownerOnlyFile(const QString& path)
+{
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isFile()) {
+        return false;
+    }
+    const QFile::Permissions permissions = info.permissions();
+    const QFile::Permissions others = QFile::ReadGroup | QFile::WriteGroup | QFile::ExeGroup |
+            QFile::ReadOther | QFile::WriteOther | QFile::ExeOther;
+    return (permissions & others) == QFile::Permissions() && info.size() <= 80;
+}
+
+QUrl configuredBrokerUrl()
+{
+    const QByteArray configured = qgetenv("PLANK_BROKER_URL");
+    if (!configured.isEmpty()) {
+        const QUrl url(QString::fromUtf8(configured));
+        if (!loopbackBroker(url)) {
+            throw GfeHttpResponseException(400, "PLANK broker address must stay on this computer");
+        }
+        return url;
+    }
+    if (!qgetenv("PLANK_FACILITY_SESSION").isEmpty() || ownerOnlyFile(sessionFilePath())) {
+        return QUrl(QStringLiteral("http://127.0.0.1:8765"));
+    }
+    return QUrl();
+}
+
+QString facilityBearer()
+{
+    const QByteArray configured = qgetenv("PLANK_FACILITY_SESSION");
+    if (!configured.isEmpty()) {
+        const QString session = QString::fromUtf8(configured).trimmed();
+        if (session.isEmpty() || session.size() > 64 || session.contains(QLatin1Char(' '))) {
+            throw GfeHttpResponseException(401, "PLANK facility sign-in is not valid");
+        }
+        return session;
+    }
+    const QString path = sessionFilePath();
+    if (!ownerOnlyFile(path)) {
+        return QString();
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QString();
+    }
+    const QString session = QString::fromUtf8(file.readAll()).trimmed();
+    file.close();
+    if (session.isEmpty() || session.size() > 64 || session.contains(QLatin1Char(' '))) {
+        throw GfeHttpResponseException(401, "PLANK facility sign-in is not valid");
+    }
+    return session;
+}
+
+QByteArray postBroker(const QUrl& url, const QByteArray& body, const QString& session, int* status)
+{
+    QNetworkAccessManager manager;
+    manager.setProxy(QNetworkProxy::NoProxy);
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("Authorization", QByteArray("Bearer ") + session.toUtf8());
+    QNetworkReply* reply = manager.post(request, body);
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timer.start(REQUEST_TIMEOUT_MS);
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    if (!reply->isFinished()) {
+        reply->abort();
+        reply->deleteLater();
+        throw GfeHttpResponseException(503, "PLANK broker did not respond");
+    }
+    *status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray payload = reply->readAll();
+    reply->deleteLater();
+    return payload;
+}
+
+void throwBrokerStatus(int status)
+{
+    if (status == 401) {
+        throw GfeHttpResponseException(401, "Facility sign-in expired. Sign in again.");
+    }
+    if (status == 403) {
+        throw GfeHttpResponseException(403, "This account is not assigned to that workstation");
+    }
+    if (status == 404) {
+        throw GfeHttpResponseException(404, "That workstation is not available");
+    }
+    if (status == 409) {
+        throw GfeHttpResponseException(409, "That workstation is already reserved");
+    }
+    throw GfeHttpResponseException(status == 0 ? 503 : status, "PLANK broker denied the connection request");
+}
+
+struct BrokerHold {
+    BrokerHold() = default;
+    BrokerHold(const BrokerHold&) = delete;
+    BrokerHold& operator=(const BrokerHold&) = delete;
+
+    QString admissionId;
+    QUrl broker;
+    QString session;
+
+    void keep()
+    {
+        admissionId.clear();
+    }
+
+    ~BrokerHold()
+    {
+        if (admissionId.isEmpty()) {
+            return;
+        }
+        try {
+            QUrl endpoint(broker);
+            endpoint.setPath(QStringLiteral("/release"));
+            endpoint.setQuery(QString());
+            const QByteArray body = QJsonDocument(QJsonObject{
+                {QStringLiteral("admission_id"), admissionId},
+            }).toJson(QJsonDocument::Compact);
+            int status = 0;
+            postBroker(endpoint, body, session, &status);
+        } catch (...) {
+        }
+    }
+};
+
+void releaseConsumedAdmission()
+{
+    if (g_admission.admissionId.size() != 36) {
+        return;
+    }
+    const QUrl broker = configuredBrokerUrl();
+    if (!broker.isValid()) {
+        return;
+    }
+    const QString session = facilityBearer();
+    if (session.isEmpty()) {
+        return;
+    }
+    QUrl endpoint(broker);
+    endpoint.setPath(QStringLiteral("/release"));
+    endpoint.setQuery(QString());
+    const QByteArray body = QJsonDocument(QJsonObject{
+        {QStringLiteral("admission_id"), g_admission.admissionId},
+    }).toJson(QJsonDocument::Compact);
+    int status = 0;
+    postBroker(endpoint, body, session, &status);
+    if (status != 200) {
+        throwBrokerStatus(status);
+    }
+}
+
+void retirePresentedAdmission()
+{
+    if (g_admission.admissionId.isEmpty()) {
+        return;
+    }
+    g_admission.set = false;
+    g_admission.wrapper = QJsonObject();
+}
+
+}
+
 void NvHTTP::setAdmissionBundle(const QJsonObject& admission, const QString& workstationUniqueId,
                                  const QString& certificateSha256)
 {
@@ -704,6 +898,15 @@ void NvHTTP::setAdmissionBundle(const QJsonObject& admission, const QString& wor
     g_admission.wrapper = admission;
     g_admission.uniqueId = workstationUniqueId;
     g_admission.certificateSha256 = certificateSha256.toLower();
+}
+
+bool NvHTTP::brokerConfigured()
+{
+    try {
+        return configuredBrokerUrl().isValid();
+    } catch (const GfeHttpResponseException&) {
+        return false;
+    }
 }
 
 QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed,
@@ -715,6 +918,76 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         throw GfeHttpResponseException(400, "Invalid PLANK authentication state");
     }
     loadAdmissionFromEnvironment();
+    BrokerHold reservation;
+    QString consumedDial;
+    if (!g_admission.set && g_admission.admissionId.size() == 36) {
+        // The Host consumes an admission on auth/start, including when the
+        // display worker is replaced and this process must sign in again.
+        consumedDial = g_admission.dialedAddress;
+        releaseConsumedAdmission();
+        g_admission = {};
+        qInfo() << "PLANK requested a fresh admission after the host consumed the previous ticket";
+    }
+    if (!g_admission.set) {
+        const QUrl broker = configuredBrokerUrl();
+        if (broker.isValid()) {
+            const QString session = facilityBearer();
+            if (session.isEmpty()) {
+                throw GfeHttpResponseException(401, "Sign in to the PLANK broker before connecting");
+            }
+            const uint16_t dialPort = m_Address.port() == 0 ? 28989 : m_Address.port();
+            const QString dialed = consumedDial.isEmpty()
+                    ? m_Address.address() + QLatin1Char(':') + QString::number(dialPort)
+                    : consumedDial;
+            const QString requestId = QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+            const QByteArray requestBody = QJsonDocument(QJsonObject{
+                {QStringLiteral("address"), dialed},
+                {QStringLiteral("request_id"), requestId},
+            }).toJson(QJsonDocument::Compact);
+            QUrl endpoint(broker);
+            endpoint.setPath(QStringLiteral("/request"));
+            endpoint.setQuery(QString());
+            int status = 0;
+            const QByteArray response = postBroker(endpoint, requestBody, session, &status);
+            if (status != 200) {
+                throwBrokerStatus(status);
+            }
+            const QJsonDocument document = QJsonDocument::fromJson(response);
+            const QJsonObject root = document.object();
+            const QString admissionId = root.value(QStringLiteral("admission_id")).toString();
+            if (admissionId.size() == 36) {
+                reservation.admissionId = admissionId;
+                reservation.broker = broker;
+                reservation.session = session;
+            }
+            const QJsonObject bundle = root.value(QStringLiteral("bundle")).toObject();
+            const QJsonObject admission = bundle.value(QStringLiteral("admission")).toObject();
+            const QString bundleId = bundle.value(QStringLiteral("workstation_uniqueid")).toString();
+            if (!document.isObject() || bundle.contains(QStringLiteral("request_id")) ||
+                    admission.value(QStringLiteral("v")).toInt() != 1 ||
+                    !admission.value(QStringLiteral("payload")).isString() ||
+                    !admission.value(QStringLiteral("sig")).isString() ||
+                    bundleId.size() != 36 || reservation.admissionId.isEmpty()) {
+                throw GfeHttpResponseException(502, "PLANK broker returned an unusable admission");
+            }
+            const QString routing = bundle.value(QStringLiteral("address")).toString();
+            const int colon = routing.lastIndexOf(QLatin1Char(':'));
+            bool portOk = false;
+            const int routingPort = colon > 0 ? routing.mid(colon + 1).toInt(&portOk) : 0;
+            const NvAddress routed(colon > 0 ? routing.left(colon) : QString(),
+                                   portOk ? static_cast<uint16_t>(routingPort) : 0);
+            if (routed.isNull() || !portOk || routingPort < 1 || routingPort > 65535) {
+                throw GfeHttpResponseException(502, "PLANK broker returned an unusable admission");
+            }
+            setAdmissionBundle(admission, bundleId,
+                               bundle.value(QStringLiteral("certificate_sha256")).toString());
+            g_admission.admissionId = admissionId;
+            g_admission.dialedAddress = dialed;
+            setAddress(routed);
+            // The identity check dials the address the broker returned.
+            m_Nam->clearAccessCache();
+        }
+    }
 
     QJsonObject startBody {
         {"username", username},
@@ -746,7 +1019,13 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         startBody.insert(QStringLiteral("admission"), g_admission.wrapper);
     }
 
-    QJsonObject result = postPlankJson("start", startBody);
+    QJsonObject result;
+    try {
+        result = postPlankJson("start", startBody);
+    } catch (const GfeHttpResponseException&) {
+        retirePresentedAdmission();
+        throw;
+    }
     for (int round = 0; round < 16; ++round) {
         const QString state = result.value("state").toString();
         if (state == "authenticated") {
@@ -757,12 +1036,16 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
             if (greeterConfirmed != nullptr) {
                 *greeterConfirmed = plankAuthenticatedGreeter(result);
             }
+            retirePresentedAdmission();
+            reservation.keep();
             return m_SessionToken;
         }
         if (state == "denied") {
+            retirePresentedAdmission();
             throw GfeHttpResponseException(401, "Operating-system authentication failed");
         }
         if (state == "admission_rejected") {
+            retirePresentedAdmission();
             throw GfeHttpResponseException(401, "PLANK admission rejected");
         }
         if (state == "busy") {
@@ -791,6 +1074,8 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
                 throw GfeHttpResponseException(400, "Unsupported PAM prompt style");
             }
         }
+        // The Host already consumed this admission when it accepted auth/start.
+        retirePresentedAdmission();
         result = postPlankJson("respond", {
             {"conversation_id", result.value("conversation_id").toString()},
             {"responses", responses},
