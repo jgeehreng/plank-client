@@ -213,6 +213,7 @@ class ComputerManager : public QObject
     friend class DeferredHostDeletionTask;
     friend class PendingAddTask;
     friend class PendingAuthenticationTask;
+    friend class BrokerWorkstationRefreshTask;
     friend class DelayedFlushThread;
 
 public:
@@ -259,6 +260,11 @@ public:
 
     void clientSideAttributeUpdated(NvComputer* computer);
 
+    // Replaces m_KnownHosts with the broker's per-subject workstation list.
+    // Only meaningful when NvHTTP::brokerConfigured() is true; this is a
+    // no-op (besides refreshing an empty list) otherwise.
+    Q_INVOKABLE void refreshBrokerWorkstations();
+
 signals:
     void hostPlatformDetected(int requestId, QString address, int platform);
     void computerStateChanged(NvComputer* computer);
@@ -266,6 +272,15 @@ signals:
     void authenticationCompleted(NvComputer* computer, QString error);
 
     void computerAddCompleted(QVariant success);
+
+    // Emitted when the broker rejects (or lacks) the facility session while
+    // fetching the workstation list. The sign-in screen should keep waiting
+    // for a successful browser-based sign-in.
+    void brokerSignInRequired();
+
+    // Emitted when a broker workstation list refresh fails for a reason
+    // other than a missing/expired session (e.g. the broker is unreachable).
+    void brokerRefreshFailed(QString error);
 
 private slots:
     void handleAboutToQuit();

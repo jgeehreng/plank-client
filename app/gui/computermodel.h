@@ -18,6 +18,7 @@ class ComputerModel : public QAbstractListModel
         SessionUserRole,
         PlankHostVersionRole,
         ManualBookmarkRole,
+        BrokerManagedRole,
         AddressRole,
         UsernameRole
     };

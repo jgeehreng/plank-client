@@ -257,25 +257,31 @@ ComputerManager::ComputerManager(StreamingPreferences* prefs)
       m_MdnsBrowser(nullptr),
       m_NeedsDelayedFlush(false)
 {
-    QSettings settings;
+    // When a broker is configured, the workstation list comes entirely from
+    // refreshBrokerWorkstations() after facility sign-in. Leave local
+    // bookmarks on disk untouched so disabling the broker later restores
+    // today's list unchanged.
+    if (!NvHTTP::brokerConfigured()) {
+        QSettings settings;
 
-    // If there's a hosts backup copy, we must have failed to commit
-    // a previous update before exiting. Restore the backup now.
-    int hosts = settings.beginReadArray(SER_HOSTS_BACKUP);
-    if (hosts == 0) {
-        // If there's no host backup, read from the primary location.
+        // If there's a hosts backup copy, we must have failed to commit
+        // a previous update before exiting. Restore the backup now.
+        int hosts = settings.beginReadArray(SER_HOSTS_BACKUP);
+        if (hosts == 0) {
+            // If there's no host backup, read from the primary location.
+            settings.endArray();
+            hosts = settings.beginReadArray(SER_HOSTS);
+        }
+
+        // Inflate our hosts from QSettings
+        for (int i = 0; i < hosts; i++) {
+            settings.setArrayIndex(i);
+            NvComputer* computer = new NvComputer(settings);
+            m_KnownHosts[computer->uuid] = computer;
+            m_LastSerializedHosts[computer->uuid] = *computer;
+        }
         settings.endArray();
-        hosts = settings.beginReadArray(SER_HOSTS);
     }
-
-    // Inflate our hosts from QSettings
-    for (int i = 0; i < hosts; i++) {
-        settings.setArrayIndex(i);
-        NvComputer* computer = new NvComputer(settings);
-        m_KnownHosts[computer->uuid] = computer;
-        m_LastSerializedHosts[computer->uuid] = *computer;
-    }
-    settings.endArray();
 
     // Start the delayed flush thread to handle saveHosts() calls
     m_DelayedFlushThread = new DelayedFlushThread(this);
@@ -412,6 +418,12 @@ void ComputerManager::saveHosts()
 {
     Q_ASSERT(m_DelayedFlushThread != nullptr && m_DelayedFlushThread->isRunning());
 
+    // m_KnownHosts holds only broker-managed entries while a broker is
+    // configured. Never let those overwrite the user's local bookmarks.
+    if (NvHTTP::brokerConfigured()) {
+        return;
+    }
+
     // Punt to a worker thread because QSettings on macOS can take ages (> 500 ms)
     // to persist our host list to disk (especially when a host has a bunch of apps).
     QMutexLocker locker(&m_DelayedFlushMutex);
@@ -463,7 +475,11 @@ void ComputerManager::startPolling()
         return;
     }
 
-    if (m_Prefs->enableMdns) {
+    if (NvHTTP::brokerConfigured()) {
+        // The broker's per-subject workstation list replaces mDNS discovery.
+        qInfo() << "mDNS discovery is disabled: a PLANK broker is configured";
+    }
+    else if (m_Prefs->enableMdns) {
         // Start an MDNS query for GameStream hosts
         m_MdnsServer.reset(new QMdnsEngine::Server());
         m_MdnsBrowser = new QMdnsEngine::Browser(m_MdnsServer.data(), "_nvstream._tcp.local.");
@@ -835,6 +851,113 @@ void ComputerManager::authenticateHost(NvComputer* computer, QString username,
     PendingAuthenticationTask* authentication = new PendingAuthenticationTask(
         this, computer, std::move(username), std::move(password), matchedMode, matchedScale);
     QThreadPool::globalInstance()->start(authentication);
+}
+
+class BrokerWorkstationRefreshTask : public QObject, public QRunnable
+{
+    Q_OBJECT
+
+public:
+    explicit BrokerWorkstationRefreshTask(ComputerManager* computerManager)
+        : m_ComputerManager(computerManager)
+    {
+        // Forward straight to the manager's own signals so ComputerModel's
+        // existing listeners pick up the refreshed list / sign-in prompt.
+        connect(this, &BrokerWorkstationRefreshTask::workstationsRefreshed,
+                computerManager, &ComputerManager::computerStateChanged);
+        connect(this, &BrokerWorkstationRefreshTask::signInRequired,
+                computerManager, &ComputerManager::brokerSignInRequired);
+        connect(this, &BrokerWorkstationRefreshTask::refreshFailed,
+                computerManager, &ComputerManager::brokerRefreshFailed);
+    }
+
+signals:
+    void workstationsRefreshed(NvComputer* computer);
+    void signInRequired();
+    void refreshFailed(QString error);
+
+private:
+    void run()
+    {
+        QVector<BrokerWorkstation> workstations;
+        try {
+            workstations = NvHTTP::fetchBrokerWorkstations();
+        } catch (const GfeHttpResponseException& error) {
+            if (error.getStatusCode() == 401) {
+                emit signInRequired();
+            }
+            else {
+                qWarning() << "Failed to refresh PLANK broker workstations:" << error.toQString();
+                emit refreshFailed(error.toQString());
+            }
+            return;
+        } catch (const QtNetworkReplyException& error) {
+            qWarning() << "Failed to refresh PLANK broker workstations:" << error.toQString();
+            emit refreshFailed(error.toQString());
+            return;
+        }
+
+        QMap<QString, NvComputer*> freshHosts;
+        for (const BrokerWorkstation& workstation : std::as_const(workstations)) {
+            NvAddress address;
+            if (!parseManualAddress(workstation.address, address)) {
+                qWarning() << "Ignoring broker workstation with an unparseable address:" << workstation.address;
+                continue;
+            }
+            NvComputer* computer = new NvComputer(
+                        address,
+                        workstation.displayName,
+                        StreamingPreferences::PLANK_PROFILE_NVENC_HEVC_10BIT_444,
+                        0,
+                        StreamingPreferences::plankDefaultProfileBitrates());
+            // Idempotent across refreshes and lines up with the
+            // sameWorkstationUuid check that NvHTTP uses on connect.
+            computer->uuid = workstation.uniqueId;
+            computer->serverUuid = workstation.uniqueId;
+            computer->brokerManaged = true;
+            freshHosts[computer->uuid] = computer;
+        }
+
+        QVector<NvComputer*> staleComputers;
+        NvComputer* notifyComputer = nullptr;
+        {
+            QWriteLocker lock(&m_ComputerManager->m_Lock);
+
+            for (NvComputer* existing : std::as_const(m_ComputerManager->m_KnownHosts)) {
+                staleComputers.append(existing);
+            }
+            m_ComputerManager->m_KnownHosts.clear();
+
+            for (NvComputer* fresh : std::as_const(freshHosts)) {
+                m_ComputerManager->m_KnownHosts[fresh->uuid] = fresh;
+                m_ComputerManager->startPollingComputer(fresh);
+                notifyComputer = fresh;
+            }
+        }
+
+        // Stop and free polling for workstations the subject can no longer access.
+        for (NvComputer* stale : std::as_const(staleComputers)) {
+            ComputerPollingEntry* entry;
+            {
+                QWriteLocker lock(&m_ComputerManager->m_Lock);
+                entry = m_ComputerManager->m_PollEntries.take(stale->uuid);
+            }
+            delete entry;
+            delete stale;
+        }
+
+        // computer may be nullptr here (an empty grant list); ComputerModel's
+        // listener only dereferences it when the host list didn't change
+        // structurally, which is never true on a broker refresh.
+        emit workstationsRefreshed(notifyComputer);
+    }
+
+    ComputerManager* m_ComputerManager;
+};
+
+void ComputerManager::refreshBrokerWorkstations()
+{
+    QThreadPool::globalInstance()->start(new BrokerWorkstationRefreshTask(this));
 }
 
 void ComputerManager::rememberPlankReconnectCredentials(

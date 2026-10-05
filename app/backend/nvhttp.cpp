@@ -804,6 +804,31 @@ QByteArray postBroker(const QUrl& url, const QByteArray& body, const QString& se
     return payload;
 }
 
+QByteArray getBroker(const QUrl& url, const QString& session, int* status)
+{
+    QNetworkAccessManager manager;
+    manager.setProxy(QNetworkProxy::NoProxy);
+    QNetworkRequest request(url);
+    request.setRawHeader("Authorization", QByteArray("Bearer ") + session.toUtf8());
+    QNetworkReply* reply = manager.get(request);
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timer.start(REQUEST_TIMEOUT_MS);
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    if (!reply->isFinished()) {
+        reply->abort();
+        reply->deleteLater();
+        throw GfeHttpResponseException(503, "PLANK broker did not respond");
+    }
+    *status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray payload = reply->readAll();
+    reply->deleteLater();
+    return payload;
+}
+
 void throwBrokerStatus(int status)
 {
     if (status == 401) {
@@ -907,6 +932,58 @@ bool NvHTTP::brokerConfigured()
     } catch (const GfeHttpResponseException&) {
         return false;
     }
+}
+
+QString NvHTTP::brokerSignInUrl()
+{
+    try {
+        QUrl broker = configuredBrokerUrl();
+        if (!broker.isValid()) {
+            return QString();
+        }
+        broker.setPath(QStringLiteral("/auth/login"));
+        broker.setQuery(QString());
+        return broker.toString();
+    } catch (const GfeHttpResponseException&) {
+        return QString();
+    }
+}
+
+QVector<BrokerWorkstation> NvHTTP::fetchBrokerWorkstations()
+{
+    const QUrl broker = configuredBrokerUrl();
+    if (!broker.isValid()) {
+        throw GfeHttpResponseException(401, "PLANK broker is not configured");
+    }
+    const QString session = facilityBearer();
+    if (session.isEmpty()) {
+        throw GfeHttpResponseException(401, "Sign in to the PLANK broker before connecting");
+    }
+    QUrl endpoint(broker);
+    endpoint.setPath(QStringLiteral("/workstations"));
+    endpoint.setQuery(QString());
+    int status = 0;
+    const QByteArray response = getBroker(endpoint, session, &status);
+    if (status != 200) {
+        throwBrokerStatus(status);
+    }
+    const QJsonDocument document = QJsonDocument::fromJson(response);
+    const QJsonArray rows = document.object().value(QStringLiteral("workstations")).toArray();
+    QVector<BrokerWorkstation> workstations;
+    workstations.reserve(rows.size());
+    for (const QJsonValue& value : rows) {
+        const QJsonObject row = value.toObject();
+        BrokerWorkstation workstation;
+        workstation.uniqueId = row.value(QStringLiteral("uniqueid")).toString();
+        workstation.address = row.value(QStringLiteral("address")).toString();
+        workstation.displayName = row.value(QStringLiteral("display_name")).toString();
+        workstation.certificateSha256 = row.value(QStringLiteral("certificate_sha256")).toString().toLower();
+        if (workstation.uniqueId.isEmpty() || workstation.address.isEmpty()) {
+            continue;
+        }
+        workstations.append(workstation);
+    }
+    return workstations;
 }
 
 QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed,

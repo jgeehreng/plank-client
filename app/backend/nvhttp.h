@@ -11,9 +11,20 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QJsonObject>
+#include <QVector>
 #include <functional>
 
 class NvComputer;
+
+// One row from the broker's GET /workstations response: the workstations
+// the signed-in subject is allowed to access.
+struct BrokerWorkstation
+{
+    QString uniqueId;
+    QString address;
+    QString displayName;
+    QString certificateSha256;
+};
 
 class NvDisplayMode
 {
@@ -167,6 +178,12 @@ public:
     static void setAdmissionBundle(const QJsonObject& admission, const QString& workstationUniqueId,
                                    const QString& certificateSha256 = QString());
     static bool brokerConfigured();
+    // Throws GfeHttpResponseException(401, ...) if the facility session is
+    // missing or the broker has expired it.
+    static QVector<BrokerWorkstation> fetchBrokerWorkstations();
+    // The browser-facing sign-in page for the configured broker, or an empty
+    // string if no broker is configured.
+    static QString brokerSignInUrl();
     bool probeWorkerReplacement(const QString& instance, const QString& certificateSha256);
     QString workerInstance() const { return m_WorkerInstance; }
     NvOutputTopology getOutputTopology(QString* certificateSha256 = nullptr);

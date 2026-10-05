@@ -66,6 +66,8 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
                     computer->plankHostVersion : QString();
     case ManualBookmarkRole:
         return computer->manualBookmark;
+    case BrokerManagedRole:
+        return computer->brokerManaged;
     case UsernameRole:
         return computer->plankUsername;
     case AddressRole:
@@ -116,6 +118,7 @@ QHash<int, QByteArray> ComputerModel::roleNames() const
     names[SessionUserRole] = "sessionUser";
     names[PlankHostVersionRole] = "plankHostVersion";
     names[ManualBookmarkRole] = "manualBookmark";
+    names[BrokerManagedRole] = "brokerManaged";
     names[AddressRole] = "address";
     names[UsernameRole] = "plankUsername";
 

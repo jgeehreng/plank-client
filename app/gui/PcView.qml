@@ -197,7 +197,7 @@ CenteredGridView {
                 width: parent.width
                 text: model.name
                 color: theme.textPrimary
-                font.pointSize: 16
+                font.pointSize: 22
                 font.weight: Font.DemiBold
                 elide: Text.ElideRight
             }
@@ -256,13 +256,13 @@ CenteredGridView {
                     parentMenu: pcContextMenu
                     text: qsTr("Wake PC")
                     visible: computerModel.relayWakeEnabled && model.manualBookmark &&
-                             !model.statusUnknown && !model.online
+                             !model.brokerManaged && !model.statusUnknown && !model.online
                     onTriggered: computerModel.requestRelayWake(index)
                 }
                 NavigableMenuItem {
                     parentMenu: pcContextMenu
                     text: qsTr("Edit bookmark…")
-                    visible: model.manualBookmark
+                    visible: model.manualBookmark && !model.brokerManaged
                     onTriggered: {
                         editBookmarkDialog.pcIndex = index
                         editBookmarkDialog.originalAddress = model.address
@@ -291,11 +291,12 @@ CenteredGridView {
                         renamePcDialog.originalName = model.name
                         renamePcDialog.open()
                     }
-                    visible: !model.manualBookmark
+                    visible: !model.manualBookmark && !model.brokerManaged
                 }
                 NavigableMenuItem {
                     parentMenu: pcContextMenu
                     text: qsTr("Delete PC")
+                    visible: !model.brokerManaged
                     onTriggered: {
                         deletePcDialog.pcIndex = index
                         deletePcDialog.pcName = model.name
@@ -349,6 +350,9 @@ CenteredGridView {
         }
 
         Keys.onDeletePressed: {
+            if (model.brokerManaged) {
+                return
+            }
             deletePcDialog.pcIndex = index
             deletePcDialog.pcName = model.name
             deletePcDialog.open()
