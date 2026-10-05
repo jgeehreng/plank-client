@@ -96,6 +96,8 @@ QVariant ComputerModel::data(const QModelIndex& index, int role) const
                     computer->plankHostVersion : QString();
     case ManualBookmarkRole:
         return computer->manualBookmark;
+    case BrokerManagedRole:
+        return computer->brokerManaged;
     case AddressRole:
         // New PLANK bookmarks have a durable manual address, but
         // workstation records created before bookmarks do not. Never expose
@@ -144,6 +146,7 @@ QHash<int, QByteArray> ComputerModel::roleNames() const
     names[SessionUserRole] = "sessionUser";
     names[PlankHostVersionRole] = "plankHostVersion";
     names[ManualBookmarkRole] = "manualBookmark";
+    names[BrokerManagedRole] = "brokerManaged";
     names[AddressRole] = "address";
 
     return names;

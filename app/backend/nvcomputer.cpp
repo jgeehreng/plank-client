@@ -363,6 +363,7 @@ bool NvComputer::isEqualSerialized(const NvComputer &that) const
            this->plankProfileBitratesKbps ==
                that.plankProfileBitratesKbps &&
            this->manualBookmark == that.manualBookmark &&
+           this->brokerManaged == that.brokerManaged &&
            this->serverUuid == that.serverUuid &&
            this->m_RememberedUsername == that.m_RememberedUsername &&
            this->outputTopology.toJson() == that.outputTopology.toJson() &&

@@ -159,6 +159,9 @@ public:
     QVector<int> plankProfileBitratesKbps =
             StreamingPreferences::plankDefaultProfileBitrates();
     bool manualBookmark = false;
+    // Sourced from the broker's per-subject workstation list rather than a
+    // local bookmark or mDNS discovery. Never persisted to QSettings.
+    bool brokerManaged = false;
     QString serverUuid;
     // Remember to update isEqualSerialized() when adding fields here!
 

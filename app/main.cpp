@@ -968,7 +968,11 @@ int main(int argc, char *argv[])
     QString initialView;
     switch (commandLineParserResult) {
     case GlobalCommandLineParser::NormalStartRequested:
-        initialView = "qrc:/gui/PcView.qml";
+        // A configured broker gates the grid behind facility sign-in; the
+        // sign-in screen pushes PcView.qml itself once the subject's
+        // authorized workstation list is fetched.
+        initialView = NvHTTP::brokerConfigured() ? "qrc:/gui/FacilitySignInView.qml"
+                                                  : "qrc:/gui/PcView.qml";
         break;
 #ifdef Q_OS_MACOS
     case GlobalCommandLineParser::PermissionsSetupRequested:
@@ -996,6 +1000,7 @@ int main(int argc, char *argv[])
 
     engine.rootContext()->setContextProperty("initialView", initialView);
     engine.rootContext()->setContextProperty("plankBrokerConfigured", NvHTTP::brokerConfigured());
+    engine.rootContext()->setContextProperty("plankBrokerSignInUrl", NvHTTP::brokerSignInUrl());
     engine.rootContext()->setContextProperty(
                 "runConfigChecks",
                 commandLineParserResult == GlobalCommandLineParser::NormalStartRequested);
