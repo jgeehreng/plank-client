@@ -1070,10 +1070,13 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
     // preflight may observe a worker change, but must not learn a new authority.
     establishHostTrust(intent);
 
+    // Uppercut hosts treat a missing start_desktop as true. Send it only to
+    // turn desktop start off, so ordinary sign-ins stay byte-compatible with
+    // upstream Hosts that accept exactly {username}.
     QJsonObject startBody {
         {"username", username},
-        {"start_desktop", startDesktop},
     };
+    if (!startDesktop) startBody.insert(QStringLiteral("start_desktop"), false);
     if (g_admission.set) {
         QNetworkReply* reply = openConnection(m_BaseUrlHttps, "serverinfo", nullptr,
                                               REQUEST_TIMEOUT_MS, NvLogLevel::NVLL_NONE);
@@ -1158,11 +1161,12 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         }
         // The Host already consumed this admission when it accepted auth/start.
         retirePresentedAdmission();
-        result = postPlankJson("respond", {
+        QJsonObject respondBody {
             {"conversation_id", result.value("conversation_id").toString()},
             {"responses", responses},
-            {"start_desktop", startDesktop},
-        });
+        };
+        if (!startDesktop) respondBody.insert(QStringLiteral("start_desktop"), false);
+        result = postPlankJson("respond", respondBody);
     }
 
     throw GfeHttpResponseException(400, "PAM conversation exceeded the round limit");
