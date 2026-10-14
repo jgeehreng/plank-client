@@ -57,6 +57,12 @@ public:
         if (m_Surface != nullptr) {
             wl_surface_destroy(m_Surface);
         }
+        if (m_AnchorSubsurface != nullptr) {
+            wl_subsurface_destroy(m_AnchorSubsurface);
+        }
+        if (m_AnchorSurface != nullptr) {
+            wl_surface_destroy(m_AnchorSurface);
+        }
         for (Buffer* buffer : m_Buffers) {
             destroyBuffer(buffer);
         }
@@ -96,26 +102,47 @@ public:
             return false;
         }
 
+        // Subsurface positions are applied by their parent's commit, even in
+        // desynchronized mode. Own that parent: a fixed, transparent 1x1
+        // anchor lets cursor updates commit independently of video swaps.
+        // Its children are not clipped to the anchor's buffer bounds.
+        m_AnchorSurface = wl_compositor_create_surface(m_Compositor);
         m_Surface = wl_compositor_create_surface(m_Compositor);
-        if (m_Surface == nullptr) {
+        if (m_AnchorSurface == nullptr || m_Surface == nullptr) {
             return false;
         }
+        wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(m_AnchorSurface), m_Queue);
         wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(m_Surface), m_Queue);
+        m_AnchorSubsurface = wl_subcompositor_get_subsurface(
+                m_Subcompositor, m_AnchorSurface, m_ParentSurface);
         m_Subsurface = wl_subcompositor_get_subsurface(
-                m_Subcompositor, m_Surface, m_ParentSurface);
-        if (m_Subsurface == nullptr) {
+                m_Subcompositor, m_Surface, m_AnchorSurface);
+        if (m_AnchorSubsurface == nullptr || m_Subsurface == nullptr) {
             return false;
         }
+        wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(m_AnchorSubsurface), m_Queue);
         wl_proxy_set_queue(reinterpret_cast<wl_proxy*>(m_Subsurface), m_Queue);
-        wl_subsurface_set_desync(m_Subsurface);
+        wl_subsurface_set_desync(m_AnchorSubsurface);
+        // Keep the cursor synchronized with our anchor so image, hotspot and
+        // position become visible together. Never commit SDL's video surface.
 
         wl_region* emptyRegion = wl_compositor_create_region(m_Compositor);
         if (emptyRegion == nullptr) {
             return false;
         }
         wl_surface_set_input_region(m_Surface, emptyRegion);
+        wl_surface_set_input_region(m_AnchorSurface, emptyRegion);
         wl_region_destroy(emptyRegion);
+        QImage transparentPixel(1, 1, QImage::Format_ARGB32_Premultiplied);
+        transparentPixel.fill(Qt::transparent);
+        Buffer* anchorBuffer = createBuffer(transparentPixel);
+        if (anchorBuffer == nullptr) {
+            return false;
+        }
+        wl_surface_attach(m_AnchorSurface, anchorBuffer->object, 0, 0);
+        wl_surface_damage(m_AnchorSurface, 0, 0, 1, 1);
         wl_surface_commit(m_Surface);
+        wl_surface_commit(m_AnchorSurface);
         wl_display_flush(m_Display);
         return true;
     }
@@ -153,6 +180,7 @@ public:
         m_PositionY = hotspotY;
         m_HasPosition = true;
         updatePosition();
+        wl_surface_commit(m_AnchorSurface);
         wl_display_flush(m_Display);
     }
 
@@ -165,6 +193,7 @@ public:
         if (!m_Visible) {
             wl_surface_attach(m_Surface, nullptr, 0, 0);
             wl_surface_commit(m_Surface);
+            wl_surface_commit(m_AnchorSurface);
         } else if (!m_Image.isNull() && m_HasPosition) {
             publishImage();
         }
@@ -220,6 +249,13 @@ private:
 
         wl_shm_pool* pool = wl_shm_create_pool(m_Shm, fd,
                                                 static_cast<int32_t>(size));
+        if (pool == nullptr) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Unable to create Wayland Wacom cursor SHM pool");
+            close(fd);
+            munmap(mapping, size);
+            return nullptr;
+        }
         wl_buffer* object = wl_shm_pool_create_buffer(
                 pool, 0, image.width(), image.height(), stride,
                 WL_SHM_FORMAT_ARGB8888);
@@ -283,6 +319,7 @@ private:
         wl_surface_attach(m_Surface, buffer->object, 0, 0);
         wl_surface_damage(m_Surface, 0, 0, m_Image.width(), m_Image.height());
         wl_surface_commit(m_Surface);
+        wl_surface_commit(m_AnchorSurface);
         wl_display_flush(m_Display);
     }
 
@@ -291,6 +328,8 @@ private:
 
     wl_display* m_Display = nullptr;
     wl_surface* m_ParentSurface = nullptr;
+    wl_surface* m_AnchorSurface = nullptr;
+    wl_subsurface* m_AnchorSubsurface = nullptr;
     wl_event_queue* m_Queue = nullptr;
     wl_registry* m_Registry = nullptr;
     wl_compositor* m_Compositor = nullptr;

@@ -697,6 +697,9 @@ void SdlInputHandler::beginRawHidReconnect()
     if (m_MacRawWacomInput) m_MacRawWacomInput->beginReconnect();
 #endif
 #ifdef HAVE_LIBINPUT_TABLET
+    if (m_LinuxWacomInput) {
+        m_LinuxWacomInput->beginReconnect();
+    }
     if (m_LinuxRawWacomInput) {
         m_LinuxRawWacomInput->beginReconnect();
     }
@@ -709,6 +712,9 @@ void SdlInputHandler::finishRawHidReconnect()
     if (m_MacRawWacomInput) m_MacRawWacomInput->finishReconnect();
 #endif
 #ifdef HAVE_LIBINPUT_TABLET
+    if (m_LinuxWacomInput) {
+        m_LinuxWacomInput->finishReconnect();
+    }
     if (m_LinuxRawWacomInput) {
         m_LinuxRawWacomInput->finishReconnect();
     }

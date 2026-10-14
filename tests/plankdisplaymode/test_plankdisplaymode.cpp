@@ -11,6 +11,7 @@ private slots:
     void preservesDetectedResolutionAboveFallback();
     void scalesHostCanvasDirectlyToClient();
     void preservesExactNativeMatch();
+    void fitsHostToActiveBackingPixels();
     void avoidsHostUpscale();
     void fallsBackWhenDetectionFails();
 };
@@ -39,6 +40,22 @@ void TestPlankDisplayMode::preservesExactNativeMatch()
     QCOMPARE(PlankDisplayMode::resolve(QSize(5120, 2160),
                                                 QSize(5120, 2160)),
              QSize(5120, 2160));
+}
+
+void TestPlankDisplayMode::fitsHostToActiveBackingPixels()
+{
+    // The caller supplies the current backing dimensions, not a different
+    // advertised native mode. A 5K active canvas must not become 3840x1620.
+    QCOMPARE(PlankDisplayMode::resolve(QSize(5120, 2160), QSize(5120, 2160)),
+             QSize(5120, 2160));
+    QCOMPARE(PlankDisplayMode::resolve(QSize(3840, 2160), QSize(5120, 2160)),
+             QSize(3840, 1620));
+    // Camera-safe Retina backing pixels and a smaller host retain aspect and
+    // no-upscale policy. Resizing the local window does not rerun this choice.
+    QCOMPARE(PlankDisplayMode::resolve(QSize(3420, 2146), QSize(5120, 2160)),
+             QSize(3420, 1442));
+    QCOMPARE(PlankDisplayMode::resolve(QSize(5120, 2160), QSize(3840, 2160)),
+             QSize(3840, 2160));
 }
 
 void TestPlankDisplayMode::avoidsHostUpscale()

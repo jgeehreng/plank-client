@@ -99,8 +99,29 @@ void LinuxWacomInput::setActive(bool active)
 
     std::lock_guard<std::mutex> lock(m_DeviceMutex);
     for (int fd : m_PenFds) {
-        updateGrab(fd, active);
+        updateGrab(fd, active && !m_Reconnecting.load());
     }
+}
+
+void LinuxWacomInput::beginReconnect()
+{
+    m_Reconnecting.store(true);
+    {
+        // Wait for any in-flight pen event, then release the old Host before
+        // its transport is stopped. No event may enter the replacement stream
+        // until finishReconnect(), even if this window remains focused.
+        std::lock_guard<std::mutex> lock(m_StateMutex);
+        cancelRemotePen();
+    }
+    std::lock_guard<std::mutex> lock(m_DeviceMutex);
+    for (int fd : m_PenFds) updateGrab(fd, false);
+}
+
+void LinuxWacomInput::finishReconnect()
+{
+    std::lock_guard<std::mutex> lock(m_DeviceMutex);
+    m_Reconnecting.store(false);
+    for (int fd : m_PenFds) updateGrab(fd, m_Active.load());
 }
 
 int LinuxWacomInput::openRestricted(const char* path, int flags, void* userData)
@@ -114,7 +135,7 @@ int LinuxWacomInput::openRestricted(const char* path, int flags, void* userData)
     if (self->isWacomPenNode(fd)) {
         std::lock_guard<std::mutex> lock(self->m_DeviceMutex);
         self->m_PenFds.push_back(fd);
-        self->updateGrab(fd, self->m_Active.load());
+        self->updateGrab(fd, self->m_Active.load() && !self->m_Reconnecting.load());
     }
     return fd;
 }
@@ -314,7 +335,7 @@ void LinuxWacomInput::handleTabletEvent(libinput_event_tablet_tool* event,
         eventType = LI_TOUCH_EVENT_BUTTON_ONLY;
     }
 
-    if (m_Active.load()) {
+    if (m_Active.load() && !m_Reconnecting.load()) {
         const float pressureOrDistance = m_TipDown ? m_Pressure : m_Distance;
         LiSendPenEvent(eventType, m_ToolType, m_Buttons,
                        std::max(0.0f, std::min(1.0f, m_X)),
