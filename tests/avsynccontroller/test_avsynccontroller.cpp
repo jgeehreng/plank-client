@@ -15,9 +15,6 @@ private slots:
     void boundsExtremeCorrection();
     void ignoresStaleVideoClock();
     void boundsLongRunPhaseError();
-    void leavesSmallAudioBacklogUnchanged();
-    void catchesUpBoundedAudioBacklog();
-    void removesCatchUpAfterBacklogDrains();
 };
 
 namespace {
@@ -121,36 +118,6 @@ void TestAvSyncController::boundsLongRunPhaseError()
             (second * 1000.0 - videoMediaMs);
     }
     QVERIFY(std::abs(relativePhaseErrorMs) < 20.0);
-}
-
-void TestAvSyncController::leavesSmallAudioBacklogUnchanged()
-{
-    PlankAvSync::AudioBacklogController controller;
-    for (std::uint32_t ticks = 0; ticks <= 1000; ticks += 100) {
-        controller.update(15, ticks);
-    }
-    QCOMPARE(controller.correctionPpm(), 0);
-}
-
-void TestAvSyncController::catchesUpBoundedAudioBacklog()
-{
-    PlankAvSync::AudioBacklogController controller;
-    for (std::uint32_t ticks = 0; ticks <= 1000; ticks += 100) {
-        controller.update(35, ticks);
-    }
-    QCOMPARE(controller.correctionPpm(), 10000);
-}
-
-void TestAvSyncController::removesCatchUpAfterBacklogDrains()
-{
-    PlankAvSync::AudioBacklogController controller;
-    for (std::uint32_t ticks = 0; ticks <= 1000; ticks += 100) {
-        controller.update(35, ticks);
-    }
-    for (std::uint32_t ticks = 1100; ticks <= 2100; ticks += 100) {
-        controller.update(0, ticks);
-    }
-    QCOMPARE(controller.correctionPpm(), 0);
 }
 
 QTEST_APPLESS_MAIN(TestAvSyncController)

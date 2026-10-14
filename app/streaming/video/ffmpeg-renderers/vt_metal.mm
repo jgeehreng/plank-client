@@ -60,11 +60,16 @@ struct MetalPresentationTarget
     bool visible = false;
     QSize frameSize;
     QSize drawableSize;
+    QSize videoSize;
+    vector_float2 horizontalCrop = {0, 1};
+    bool reduceHorizontal = false;
+    std::array<id<MTLTexture>, MAX_VIDEO_PLANES> reducedPlanes {};
 
     ~MetalPresentationTarget()
     {
         [drawable release];
         [vertices release];
+        for (auto texture : reducedPlanes) [texture release];
         if (view) SDL_Metal_DestroyView(view);
     }
 };
@@ -91,6 +96,7 @@ public:
           m_OverlayTextures{},
           m_OverlayLock(0),
           m_VideoPipelineState(nullptr),
+          m_HorizontalReductionPipeline(nullptr),
           m_OverlayPipelineState(nullptr),
           m_ShaderLibrary(nullptr),
           m_CommandQueue(nullptr),
@@ -109,6 +115,7 @@ public:
         if (m_HwContext) av_buffer_unref(&m_HwContext);
         [m_CscParamsBuffer release];
         [m_VideoPipelineState release];
+        [m_HorizontalReductionPipeline release];
         [m_OverlayPipelineState release];
         [m_ShaderLibrary release];
         [m_CommandQueue release];
@@ -168,12 +175,21 @@ public:
         if (!slice.visible) return true; // Clear this output to black.
 
         const QRect& dst = slice.destinationRect;
+        target.videoSize = dst.size();
+        target.reduceHorizontal = slice.sourceRect.width() > 8.0 * dst.width();
+        target.horizontalCrop = {float(slice.sourceRect.left() / frame->width),
+                                 float(slice.sourceRect.right() / frame->width)};
+        // Native-size/upscale and ordinary reductions allocate no intermediate.
+        for (auto& texture : target.reducedPlanes) {
+            [texture release];
+            texture = nil;
+        }
         const float x0 = -1.0f + 2.0f * dst.x() / width;
         const float x1 = -1.0f + 2.0f * (dst.x() + dst.width()) / width;
         const float y0 = 1.0f - 2.0f * dst.y() / height;
         const float y1 = 1.0f - 2.0f * (dst.y() + dst.height()) / height;
-        const float u0 = slice.sourceRect.left() / frame->width;
-        const float u1 = slice.sourceRect.right() / frame->width;
+        const float u0 = target.reduceHorizontal ? 0.0f : target.horizontalCrop.x;
+        const float u1 = target.reduceHorizontal ? 1.0f : target.horizontalCrop.y;
         const float v0 = slice.sourceRect.top() / frame->height;
         const float v1 = slice.sourceRect.bottom() / frame->height;
         const Vertex verts[] = {
@@ -426,8 +442,47 @@ public:
                 CVMetalTextureGetTexture(textures.cv[i]) : mapPlaneForSoftwareFrame(frame, i);
             if (!planesToDraw[i]) return;
         }
+        // Allocate before encoding any output or incrementing presentation
+        // counters, so an allocation failure cannot strand a pending callback.
+        for (auto& target : m_Targets) {
+            if (!target->visible || !target->reduceHorizontal) continue;
+            for (size_t i = 0; i < planes; ++i) {
+                auto& reduced = target->reducedPlanes[i];
+                if (reduced && reduced.width == NSUInteger(target->videoSize.width()) &&
+                        reduced.height == planesToDraw[i].height) continue;
+                [reduced release];
+                // Half floats retain all 10-bit code levels and are filterable
+                // on every supported Apple GPU; RG32Float filtering is optional.
+                auto descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRG16Float
+                    width:target->videoSize.width() height:planesToDraw[i].height mipmapped:NO];
+                descriptor.storageMode = MTLStorageModePrivate;
+                descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+                reduced = [m_MetalLayer.device newTextureWithDescriptor:descriptor];
+                if (!reduced) {
+                    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Metal video reduction allocation failed");
+                    discardNextDrawable();
+                    return;
+                }
+            }
+        }
         auto commandBuffer = [m_CommandQueue commandBuffer];
         for (auto& target : m_Targets) {
+            auto targetPlanes = planesToDraw;
+            if (target->visible && target->reduceHorizontal) {
+                for (size_t i = 0; i < planes; ++i) {
+                    auto reduced = target->reducedPlanes[i];
+                    auto encoder = [commandBuffer computeCommandEncoder];
+                    [encoder setComputePipelineState:m_HorizontalReductionPipeline];
+                    [encoder setTexture:planesToDraw[i] atIndex:0];
+                    [encoder setTexture:reduced atIndex:1];
+                    [encoder setBytes:&target->horizontalCrop length:sizeof(target->horizontalCrop) atIndex:0];
+                    const NSUInteger width = m_HorizontalReductionPipeline.threadExecutionWidth;
+                    [encoder dispatchThreads:MTLSizeMake(reduced.width, reduced.height, 1)
+                        threadsPerThreadgroup:MTLSizeMake(width, 1, 1)];
+                    [encoder endEncoding];
+                    targetPlanes[i] = reduced;
+                }
+            }
             auto renderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
             renderPassDescriptor.colorAttachments[0].texture = target->drawable.texture;
             renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
@@ -437,7 +492,7 @@ public:
             if (target->visible) {
                 [renderEncoder setRenderPipelineState:m_VideoPipelineState];
                 for (size_t i = 0; i < planes; ++i)
-                    [renderEncoder setFragmentTexture:planesToDraw[i] atIndex:i];
+                    [renderEncoder setFragmentTexture:targetPlanes[i] atIndex:i];
                 [renderEncoder setFragmentBuffer:m_CscParamsBuffer offset:0 atIndex:0];
                 [renderEncoder setVertexBuffer:target->vertices offset:0 atIndex:0];
                 [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
@@ -654,6 +709,15 @@ public:
             return false;
         }
 
+        auto reductionFunction = [m_ShaderLibrary newFunctionWithName:@"cs_reduce_horizontal"];
+        m_HorizontalReductionPipeline = [device newComputePipelineStateWithFunction:reductionFunction error:&shaderError];
+        [reductionFunction release];
+        if (!m_HorizontalReductionPipeline) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to compile video reduction: %s",
+                shaderError.localizedDescription.UTF8String);
+            return false;
+        }
+
         // Create a command queue for submission
         m_CommandQueue = [m_MetalLayer.device newCommandQueue];
         return true;
@@ -818,6 +882,7 @@ private:
     id<MTLTexture> m_OverlayTextures[Overlay::OverlayMax];
     SDL_SpinLock m_OverlayLock;
     id<MTLRenderPipelineState> m_VideoPipelineState;
+    id<MTLComputePipelineState> m_HorizontalReductionPipeline;
     id<MTLRenderPipelineState> m_OverlayPipelineState;
     id<MTLLibrary> m_ShaderLibrary;
     id<MTLCommandQueue> m_CommandQueue;

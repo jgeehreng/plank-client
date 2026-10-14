@@ -32,12 +32,11 @@ public:
 
     virtual int getAudioClockCorrectionPpm() override;
 
-    virtual int getAudioBacklogCorrectionPpm() override;
-
-    virtual quint64 getSkippedAudioBlockCount() override;
     virtual AudioFormat getAudioBufferFormat();
 
 private:
+    static void SDLCALL observeOutputPull(void* userdata, SDL_AudioStream* stream,
+                                         int additionalBytes, int requestedBytes);
     SDL_AudioStream* m_AudioStream;
     void* m_AudioBuffer;
     int m_FrameSize;
@@ -51,12 +50,14 @@ private:
     quint64 m_RawAudioFrames;
     quint64 m_SubmittedAudioFrames;
     qint64 m_LastSubmittedAudioMediaTimeMs;
-    quint64 m_SkippedAudioBlocks;
     PlankAvSync::AudioRateController m_AudioRateController;
-    PlankAvSync::AudioBacklogController m_AudioBacklogController;
+    PlankAvSync::AudioPhaseController m_AudioPhaseController;
     bool m_CommonAudioVideoEpoch;
     Uint64 m_LastTimestampTelemetry = 0;
+    Uint64 m_LastCorrectionTelemetry = 0;
+    Uint64 m_LastCompensationUpdate = 0;
     PlankAvSync::AudioTimestampObserver m_AudioTimestampObserver;
+    PlankAvSync::AudioPlaybackObserver m_PlaybackObserver;
 
 #if defined(HAVE_FFMPEG) && (defined(Q_OS_LINUX) || defined(Q_OS_MACOS))
     SwrContext* m_SwrContext;
