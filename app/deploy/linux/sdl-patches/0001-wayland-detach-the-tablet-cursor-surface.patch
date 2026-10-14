@@ -1,0 +1,17 @@
+Subject: [PATCH] wayland: detach the tablet's surface when freeing its cursor
+
+The pointer and tablet cursor surfaces have independent lifetimes. The pointer
+surface may be NULL when a tablet still references a replaced custom cursor.
+Do not detach an unrelated pointer surface or dereference a NULL Wayland proxy.
+
+--- a/src/video/wayland/SDL_waylandmouse.c
++++ b/src/video/wayland/SDL_waylandmouse.c
+@@ -915,7 +915,7 @@ static void Wayland_FreeCursorData(SDL_CursorData *d)
+ 
+                 // Custom cursor buffers are about to be destroyed, so ensure they are detached.
+                 if (!d->is_system_cursor && tool->cursor_state.surface) {
+-                    wl_surface_attach(seat->pointer.cursor_state.surface, NULL, 0, 0);
++                    wl_surface_attach(tool->cursor_state.surface, NULL, 0, 0);
+                 }
+ 
+                 tool->cursor_state.current_cursor = NULL;

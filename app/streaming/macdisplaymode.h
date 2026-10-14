@@ -25,6 +25,17 @@ inline bool dimensions(CGDisplayModeRef mode, Snapshot& result)
     return true;
 }
 
+// Presentation follows current backing pixels even when a driver advertises a
+// different native panel mode. Reading this snapshot never changes display mode.
+inline bool currentSnapshot(CGDirectDisplayID display, Snapshot& result)
+{
+    result = {};
+    CGDisplayModeRef current = CGDisplayCopyDisplayMode(display);
+    const bool valid = dimensions(current, result);
+    if (current) CGDisplayModeRelease(current);
+    return valid;
+}
+
 // Some drivers expose a valid current mode without marking any listed mode
 // native. Use those current backing pixels; never guess from the largest mode
 // or change the user's display configuration to obtain presentation geometry.
@@ -41,11 +52,8 @@ inline bool snapshot(CGDirectDisplayID display, Snapshot& result)
         }
     }
     if (!result.native) {
-        CGDisplayModeRef current = CGDisplayCopyDisplayMode(display);
-        const bool valid = dimensions(current, result);
-        if (current) CGDisplayModeRelease(current);
         if (modes) CFRelease(modes);
-        return valid;
+        return currentSnapshot(display, result);
     }
 #if TARGET_CPU_ARM64
     if (CGDisplayIsBuiltin(display)) {

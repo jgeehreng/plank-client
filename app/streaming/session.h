@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include "plankcallbacktarget.h"
 #include <thread>
 
 #include <Limelight.h>
@@ -460,6 +461,8 @@ private:
     QVector<SDL_Window*> m_SecondaryWindows;
     PlankPresentationLayout m_PresentationLayout;
     SdlInputHandler* m_InputHandler;
+    PlankCallbackTarget<SdlInputHandler> m_InputCallbacks;
+    void destroyInputHandler();
     int m_FlushingWindowEventsRef;
 
     bool m_AsyncConnectionSuccess;

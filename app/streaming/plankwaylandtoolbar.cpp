@@ -249,7 +249,9 @@ private:
             self->m_Seat = static_cast<wl_seat*>(wl_registry_bind(
                     registry, name, &wl_seat_interface,
                     std::min(version, 7u)));
-            wl_seat_add_listener(self->m_Seat, &SeatListener, self);
+            if (self->m_Seat != nullptr) {
+                wl_seat_add_listener(self->m_Seat, &SeatListener, self);
+            }
         }
     }
 
@@ -262,7 +264,9 @@ private:
         if ((capabilities & WL_SEAT_CAPABILITY_POINTER) != 0 &&
                 self->m_Pointer == nullptr) {
             self->m_Pointer = wl_seat_get_pointer(seat);
-            wl_pointer_add_listener(self->m_Pointer, &PointerListener, self);
+            if (self->m_Pointer != nullptr) {
+                wl_pointer_add_listener(self->m_Pointer, &PointerListener, self);
+            }
         } else if ((capabilities & WL_SEAT_CAPABILITY_POINTER) == 0 &&
                    self->m_Pointer != nullptr) {
             wl_pointer_destroy(self->m_Pointer);
@@ -384,6 +388,13 @@ private:
 
         wl_shm_pool* pool = wl_shm_create_pool(m_Shm, fd,
                                                 static_cast<int32_t>(size));
+        if (pool == nullptr) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Unable to create Wayland toolbar SHM pool");
+            close(fd);
+            munmap(mapping, size);
+            return nullptr;
+        }
         wl_buffer* object = wl_shm_pool_create_buffer(
                 pool, 0, image.width(), image.height(), stride,
                 WL_SHM_FORMAT_ARGB8888);
