@@ -18,6 +18,8 @@ public:
     LinuxWacomInput& operator=(const LinuxWacomInput&) = delete;
 
     void setActive(bool active);
+    void beginReconnect();
+    void finishReconnect();
 
 private:
     static int openRestricted(const char* path, int flags, void* userData);
@@ -31,6 +33,7 @@ private:
 
     std::atomic<bool> m_Active;
     std::atomic<bool> m_Stopping;
+    std::atomic<bool> m_Reconnecting{false};
     std::thread m_Thread;
     std::mutex m_DeviceMutex;
     std::mutex m_StateMutex;
