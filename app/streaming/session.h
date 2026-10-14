@@ -119,6 +119,8 @@ public:
     }
 };
 
+class BrokerHeartbeatThread;
+
 class Session : public QObject
 {
     Q_OBJECT
@@ -243,6 +245,11 @@ private:
     bool negotiatePlankTransportSession(quint16 sessionPort, QString& errorMessage);
 
     void stopPlankTransportDataPlane();
+
+    // Uppercut: keep the broker reservation alive while the stream runs.
+    void startBrokerHeartbeat();
+    void stopBrokerHeartbeat();
+    BrokerHeartbeatThread* m_BrokerHeartbeat = nullptr;
 
 #ifdef PLANK_TRANSPORT
     void startPlankTransportMediaReceivers();

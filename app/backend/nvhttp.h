@@ -218,6 +218,15 @@ public:
     // The browser-facing sign-in page for the configured broker, or an empty
     // string if no broker is configured.
     static QString brokerSignInUrl();
+    // Uppercut: the broker reservation this process holds for its current
+    // stream, or an empty string. Safe to call from any thread.
+    static QString liveBrokerAdmission();
+    // POST /heartbeat for one reservation. Returns the broker's HTTP status,
+    // or 0 when it is not configured or did not answer. Never throws.
+    static int sendBrokerHeartbeat(const QString& admissionId);
+    // Best-effort POST /release for the live reservation, then forget it.
+    // Never throws.
+    static void releaseLiveBrokerAdmission();
     bool probeWorkerReplacement(const QString& instance, const QString& certificateSha256);
     QString workerInstance() const { return m_WorkerInstance; }
     NvOutputTopology getOutputTopology(QString* certificateSha256 = nullptr);

@@ -15,6 +15,7 @@
 #include "backend/computermanager.h"
 #include "backend/nvaddress.h"
 #include "backend/nvhttp.h"
+#include "backend/brokerheartbeatpolicy.h"
 #ifdef Q_OS_MACOS
 #include "macapplication.h"
 #endif
@@ -65,6 +66,9 @@
 #define SDL_CODE_PLANK_CLIPBOARD 111
 #define SDL_CODE_PLANK_CLIPBOARD_POLL 112
 
+#include <QMutex>
+#include <QMutexLocker>
+#include <QWaitCondition>
 #include <QtEndian>
 #include <QCoreApplication>
 #include <QThreadPool>
@@ -1972,7 +1976,7 @@ private:
 #endif
         LiStopConnection();
         m_Session->stopPlankTransportDataPlane();
-
+        m_Session->stopBrokerHeartbeat();
     }
 
     Session* m_Session;
@@ -3830,6 +3834,87 @@ bool Session::finishPlankReconnect(
 
 // At most one bounded, credential-free probe is outstanding. It owns its
 // address/identity snapshots and never reads or changes Session state.
+// Uppercut: sends a broker heartbeat now and every 30 seconds while the
+// stream runs, so the broker keeps this workstation reserved. A failure is
+// logged but never ends the stream; the Host already admitted it.
+class BrokerHeartbeatThread : public QThread
+{
+public:
+    void requestStop()
+    {
+        QMutexLocker lock(&m_Mutex);
+        m_Stop = true;
+        m_Wake.wakeAll();
+    }
+
+    void run() override
+    {
+        BrokerHeartbeatPolicy policy;
+        for (;;) {
+            const QString admissionId = NvHTTP::liveBrokerAdmission();
+            const std::string id = admissionId.toStdString();
+            if (policy.shouldSend(id)) {
+                const int status = NvHTTP::sendBrokerHeartbeat(admissionId);
+                switch (policy.record(id, status)) {
+                case BrokerHeartbeatPolicy::Action::Quiet:
+                    break;
+                case BrokerHeartbeatPolicy::Action::LogFailure:
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                "PLANK broker heartbeat failed (status %d); the stream continues",
+                                status);
+                    break;
+                case BrokerHeartbeatPolicy::Action::LogRecovered:
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                                "PLANK broker heartbeat recovered");
+                    break;
+                case BrokerHeartbeatPolicy::Action::Stop:
+                    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                                "PLANK broker no longer holds this reservation (status %d); "
+                                "heartbeats stop until the next sign-in",
+                                status);
+                    break;
+                }
+            }
+            QMutexLocker lock(&m_Mutex);
+            if (!m_Stop) {
+                m_Wake.wait(&m_Mutex, static_cast<unsigned long>(BrokerHeartbeatPolicy::IntervalMs));
+            }
+            if (m_Stop) {
+                return;
+            }
+        }
+    }
+
+private:
+    QMutex m_Mutex;
+    QWaitCondition m_Wake;
+    bool m_Stop = false;
+};
+
+void Session::startBrokerHeartbeat()
+{
+    if (m_BrokerHeartbeat != nullptr || !NvHTTP::brokerConfigured() ||
+            NvHTTP::liveBrokerAdmission().isEmpty()) {
+        return;
+    }
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PLANK broker heartbeat started");
+    m_BrokerHeartbeat = new BrokerHeartbeatThread();
+    m_BrokerHeartbeat->start();
+}
+
+void Session::stopBrokerHeartbeat()
+{
+    if (m_BrokerHeartbeat != nullptr) {
+        m_BrokerHeartbeat->requestStop();
+        m_BrokerHeartbeat->wait();
+        delete m_BrokerHeartbeat;
+        m_BrokerHeartbeat = nullptr;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "PLANK broker heartbeat stopped");
+    }
+    // Free the workstation now instead of two minutes after the last beat.
+    NvHTTP::releaseLiveBrokerAdmission();
+}
+
 class PlankWorkerProbeThread : public QThread
 {
 public:
@@ -4087,6 +4172,8 @@ void Session::execInternal()
         QThreadPool::globalInstance()->start(new DeferredSessionCleanupTask(this));
         return;
     }
+
+    startBrokerHeartbeat();
 
 #ifdef Q_OS_MACOS
     startClipboardPollTimer();

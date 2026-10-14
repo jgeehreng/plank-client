@@ -27,6 +27,8 @@
 #include <QNetworkProxy>
 #include <QNetworkRequest>
 #include <QUuid>
+#include <QMutex>
+#include <QMutexLocker>
 
 #define FAST_FAIL_TIMEOUT_MS 2000
 #define REQUEST_TIMEOUT_MS 5000
@@ -47,6 +49,9 @@ struct AdmissionMemory {
 };
 
 AdmissionMemory g_admission;
+// Guards g_admission.admissionId: the heartbeat thread reads it while a
+// reconnect on another thread may replace it.
+QMutex g_admissionIdLock;
 
 bool sameWorkstationUuid(const QString& left, const QString& right)
 {
@@ -986,6 +991,69 @@ QVector<BrokerWorkstation> NvHTTP::fetchBrokerWorkstations()
     return workstations;
 }
 
+QString NvHTTP::liveBrokerAdmission()
+{
+    QMutexLocker lock(&g_admissionIdLock);
+    return g_admission.admissionId.size() == 36 ? g_admission.admissionId : QString();
+}
+
+int NvHTTP::sendBrokerHeartbeat(const QString& admissionId)
+{
+    try {
+        const QUrl broker = configuredBrokerUrl();
+        if (!broker.isValid() || admissionId.size() != 36) {
+            return 0;
+        }
+        const QString session = facilityBearer();
+        if (session.isEmpty()) {
+            return 401;
+        }
+        QUrl endpoint(broker);
+        endpoint.setPath(QStringLiteral("/heartbeat"));
+        endpoint.setQuery(QString());
+        const QByteArray body = QJsonDocument(QJsonObject{
+            {QStringLiteral("admission_id"), admissionId},
+        }).toJson(QJsonDocument::Compact);
+        int status = 0;
+        postBroker(endpoint, body, session, &status);
+        return status;
+    } catch (const GfeHttpResponseException& error) {
+        return error.getStatusCode() == 401 ? 401 : 0;
+    }
+    catch (...) {
+        return 0;
+    }
+}
+
+void NvHTTP::releaseLiveBrokerAdmission()
+{
+    const QString admissionId = liveBrokerAdmission();
+    if (admissionId.isEmpty()) {
+        return;
+    }
+    try {
+        const QUrl broker = configuredBrokerUrl();
+        const QString session = broker.isValid() ? facilityBearer() : QString();
+        if (!session.isEmpty()) {
+            QUrl endpoint(broker);
+            endpoint.setPath(QStringLiteral("/release"));
+            endpoint.setQuery(QString());
+            const QByteArray body = QJsonDocument(QJsonObject{
+                {QStringLiteral("admission_id"), admissionId},
+            }).toJson(QJsonDocument::Compact);
+            int status = 0;
+            postBroker(endpoint, body, session, &status);
+        }
+    } catch (...) {
+    }
+    // Forget it either way. The broker frees an unreleased reservation two
+    // minutes after the last heartbeat.
+    QMutexLocker lock(&g_admissionIdLock);
+    if (g_admission.admissionId == admissionId) {
+        g_admission = {};
+    }
+}
+
 QString NvHTTP::authenticate(QString username, QString password, bool* greeterConfirmed,
                              AuthenticationIntent intent, bool startDesktop)
 {
@@ -1002,7 +1070,10 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
         // display worker is replaced and this process must sign in again.
         consumedDial = g_admission.dialedAddress;
         releaseConsumedAdmission();
-        g_admission = {};
+        {
+            QMutexLocker lock(&g_admissionIdLock);
+            g_admission = {};
+        }
         qInfo() << "PLANK requested a fresh admission after the host consumed the previous ticket";
     }
     if (!g_admission.set) {
@@ -1058,7 +1129,10 @@ QString NvHTTP::authenticate(QString username, QString password, bool* greeterCo
             }
             setAdmissionBundle(admission, bundleId,
                                bundle.value(QStringLiteral("certificate_sha256")).toString());
-            g_admission.admissionId = admissionId;
+            {
+                QMutexLocker lock(&g_admissionIdLock);
+                g_admission.admissionId = admissionId;
+            }
             g_admission.dialedAddress = dialed;
             setAddress(routed);
             // The identity check dials the address the broker returned.

@@ -268,6 +268,7 @@ HEADERS += \
     backend/nvcomputer.h \
     backend/planknetwork.h \
     backend/nvhttp.h \
+    backend/brokerheartbeatpolicy.h \
     backend/hosttruststore.h \
     backend/hosttlsguard.h \
     backend/desktopstage.h \
