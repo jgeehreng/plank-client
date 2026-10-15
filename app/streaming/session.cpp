@@ -3006,7 +3006,7 @@ bool Session::startConnectionAsync(bool reconnecting,
                 return false;
             }
         };
-        const auto waitForReplacementWorkerAndLaunch = [&]() -> bool {
+        const auto waitForReplacementWorkerAndLaunch = [&](const QString& waitMessage) -> bool {
             constexpr int RetryIntervalMs = 500;
             constexpr int MaximumWaitMs = 45000;
             constexpr int CancellationPollMs = 50;
@@ -3019,7 +3019,7 @@ bool Session::startConnectionAsync(bool reconnecting,
             m_WaitingForSessionCleanup.store(true);
             emit sessionCleanupWaitChanged(
                         true,
-                        tr("Applying workstation display layout..."));
+                        waitMessage);
             qInfo() << "PLANK host display transition started; waiting up to"
                     << MaximumWaitMs << "ms";
             bool authenticationRefreshRequired = false;
@@ -3198,7 +3198,7 @@ bool Session::startConnectionAsync(bool reconnecting,
                         QStringLiteral("PLANK workstation session is active");
             if (displayTransitionStarted) {
                 displayTransitionSubmitted = true;
-                if (!waitForReplacementWorkerAndLaunch()) {
+                if (!waitForReplacementWorkerAndLaunch(tr("Applying workstation display layout..."))) {
                     return false;
                 }
             }
@@ -3297,7 +3297,9 @@ bool Session::startConnectionAsync(bool reconnecting,
             }
             qInfo() << "PLANK launch lost the display worker during a session start; waiting:"
                     << e.toQString();
-            if (!waitForReplacementWorkerAndLaunch()) {
+            // After a sign-in, the host restarts its worker to attach to the
+            // desktop GDM just opened; that is the usual cause here.
+            if (!waitForReplacementWorkerAndLaunch(tr("Opening your desktop..."))) {
                 return false;
             }
         }
