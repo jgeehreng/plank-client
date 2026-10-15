@@ -6,8 +6,9 @@ import BrokerSignIn 1.0
 import ComputerManager 1.0
 
 // Uppercut: facility sign-in in the PCoIP client's shape. Saved connections,
-// then username and password, then Duo (Send Me a Push), then
-// the workstations this account may use.
+// then username and password. A broker connection then asks Duo (Send Me a
+// Push) and lists the workstations this account may use; a workstation
+// connection goes straight to that workstation on the office network.
 Item {
     id: signInView
     objectName: page === "connections" ? qsTr("Saved connections") :
@@ -23,6 +24,9 @@ Item {
     // BrokerSignIn.step for the password and Duo steps.
     property string page: "connections"
     property int editIndex: -1
+    // "broker" or "workstation", for the add/edit page.
+    property string editKind: "broker"
+    readonly property bool workstationConnection: BrokerSignIn.connectionKind === "workstation"
     property bool awaitingWorkstations: false
     property string listError: ""
 
@@ -58,6 +62,8 @@ Item {
     function editConnection(index) {
         editIndex = index
         var row = index >= 0 ? BrokerSignIn.connections[index] : null
+        editKind = row ? row.kind : "broker"
+        kindBox.currentIndex = editKind === "workstation" ? 1 : 0
         addressField.text = row ? row.address : ""
         nameField.text = row ? row.name : ""
         editError.text = ""
@@ -66,7 +72,7 @@ Item {
     }
 
     function saveConnection() {
-        var error = BrokerSignIn.saveConnection(editIndex, nameField.text, addressField.text)
+        var error = BrokerSignIn.saveConnection(editIndex, nameField.text, addressField.text, editKind)
         if (error.length > 0) {
             editError.text = error
             return
@@ -85,14 +91,23 @@ Item {
     function handleSignedIn() {
         listError = ""
         awaitingWorkstations = true
-        ComputerManager.refreshBrokerWorkstations()
+        if (workstationConnection) {
+            // An unnamed connection is called by its address; let the
+            // workstation's own name show instead.
+            var name = BrokerSignIn.connectionName === BrokerSignIn.connectionAddress ?
+                        "" : BrokerSignIn.connectionName
+            ComputerManager.showDirectWorkstation(name, BrokerSignIn.connectionAddress)
+        } else {
+            ComputerManager.refreshBrokerWorkstations()
+        }
     }
 
     function handleWorkstationsReady() {
         if (!awaitingWorkstations)
             return
         awaitingWorkstations = false
-        stackView.push("qrc:/gui/PcView.qml")
+        // Like PCoIP, a workstation connection goes straight to the desktop.
+        stackView.push("qrc:/gui/PcView.qml", { "autoConnect": workstationConnection })
     }
 
     function handleSignInRequired() {
@@ -108,7 +123,7 @@ Item {
             return
         awaitingWorkstations = false
         BrokerSignIn.signOut()
-        listError = qsTr("Couldn't load your workstations: %1").arg(error)
+        listError = workstationConnection ? error : qsTr("Couldn't load your workstations: %1").arg(error)
     }
 
     Component.onCompleted: {
@@ -269,7 +284,9 @@ Item {
                                     font.weight: Font.DemiBold
                                 }
                                 Label {
-                                    text: modelData.address
+                                    text: (modelData.kind === "workstation" ? qsTr("Workstation") :
+                                                                              qsTr("Connection broker")) +
+                                          "  ·  " + modelData.address
                                     color: theme.textSecondary
                                     font.pointSize: 10
                                 }
@@ -297,10 +314,24 @@ Item {
                 width: Math.min(parent.width, 420)
                 spacing: theme.spaceSmall
 
-                Label { text: qsTr("Host Address"); color: theme.textSecondary }
+                Label { text: qsTr("Connection Type"); color: theme.textSecondary }
+                PlankComboBox {
+                    id: kindBox
+                    model: [qsTr("Connection broker (password and Duo)"),
+                            qsTr("Workstation on the office network")]
+                    Layout.fillWidth: true
+                    onActivated: signInView.editKind = currentIndex === 1 ? "workstation" : "broker"
+                }
+
+                Label {
+                    text: qsTr("Host Address")
+                    color: theme.textSecondary
+                    Layout.topMargin: theme.spaceMedium
+                }
                 PlankTextField {
                     id: addressField
-                    placeholderText: qsTr("broker.example.com")
+                    placeholderText: signInView.editKind === "workstation" ? qsTr("nyc-lfx-003")
+                                                                           : qsTr("broker.example.com")
                     inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhUrlCharactersOnly
                     Layout.fillWidth: true
                     Keys.onReturnPressed: nameField.forceActiveFocus()
@@ -313,7 +344,8 @@ Item {
                 }
                 PlankTextField {
                     id: nameField
-                    placeholderText: qsTr("New York")
+                    placeholderText: signInView.editKind === "workstation" ? qsTr("Optional")
+                                                                           : qsTr("New York")
                     Layout.fillWidth: true
                     Keys.onReturnPressed: signInView.saveConnection()
                     Keys.onEnterPressed: signInView.saveConnection()

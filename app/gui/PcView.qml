@@ -38,10 +38,21 @@ CenteredGridView {
     // Note: Any initialization done here that is critical for streaming must
     // also be done in CliStartStreamSegue.qml, since this code does not run
     // for command-line initiated streams.
+    // Uppercut: set when a "Workstation" saved connection opened this list;
+    // sign in to that one workstation straight away, as PCoIP does.
+    property bool autoConnect: false
+
     StackView.onActivated: {
         // Setup signals on CM
         ComputerManager.computerAddCompleted.connect(addComplete)
 
+        if (autoConnect) {
+            autoConnect = false
+            Qt.callLater(function() {
+                if (pcGrid.count > 0)
+                    signInToWorkstation(0)
+            })
+        }
     }
 
     StackView.onDeactivating: {

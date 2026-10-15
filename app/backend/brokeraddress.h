@@ -93,6 +93,36 @@ inline QUrl normalize(const QString& input, QString* error)
     return result;
 }
 
+// A "Workstation" saved connection: a PLANK host reached directly on the
+// office network. Returns "host" or "host:port" (lower case), or "" and sets
+// *error. The PLANK client adds its default port when none is given.
+//
+//   NYC-LFX-003            -> nyc-lfx-003
+//   192.168.76.43:28989    -> 192.168.76.43:28989
+inline QString workstation(const QString& input, QString* error)
+{
+    const QString text = input.trimmed();
+    if (text.isEmpty()) {
+        if (error) *error = QStringLiteral("Enter the workstation's name or address.");
+        return QString();
+    }
+    QUrl url(QStringLiteral("x://") + text, QUrl::StrictMode);
+    if (text.contains(QStringLiteral("://")) || !url.isValid() || url.host().isEmpty() ||
+            !url.userInfo().isEmpty() || !url.path().isEmpty() || url.hasQuery() ||
+            url.hasFragment() || !validHostName(url.host())) {
+        if (error) *error = QStringLiteral("Enter just the workstation's name or IP address, like nyc-lfx-003.");
+        return QString();
+    }
+    const int port = url.port(-1);
+    if (port == 0 || port > 65535) {
+        if (error) *error = QStringLiteral("That isn't a valid port.");
+        return QString();
+    }
+    if (error) error->clear();
+    const QString host = url.host().toLower();
+    return port > 0 ? QStringLiteral("%1:%2").arg(host).arg(port) : host;
+}
+
 // How a saved address is shown: the host, plus the port when it isn't the default.
 inline QString display(const QUrl& url)
 {

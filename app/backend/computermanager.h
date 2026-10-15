@@ -267,6 +267,11 @@ public:
     // no-op (besides refreshing an empty list) otherwise.
     Q_INVOKABLE void refreshBrokerWorkstations();
 
+    // Uppercut: replaces m_KnownHosts with one workstation reached directly
+    // (a "Workstation" saved connection). Reports like a broker refresh:
+    // computerStateChanged when ready, brokerRefreshFailed on error.
+    Q_INVOKABLE void showDirectWorkstation(QString name, QString address);
+
 signals:
     void hostPlatformDetected(int requestId, QString address, int platform);
     void computerStateChanged(NvComputer* computer);

@@ -1057,8 +1057,15 @@ class BrokerWorkstationRefreshTask : public QObject, public QRunnable
     Q_OBJECT
 
 public:
-    explicit BrokerWorkstationRefreshTask(ComputerManager* computerManager)
-        : m_ComputerManager(computerManager)
+    // With directAddress set, the list is that one workstation, reached
+    // without a broker (a "Workstation" saved connection on the office
+    // network), instead of the broker's list for the signed-in account.
+    explicit BrokerWorkstationRefreshTask(ComputerManager* computerManager,
+                                          QString directName = QString(),
+                                          QString directAddress = QString())
+        : m_ComputerManager(computerManager),
+          m_DirectName(std::move(directName)),
+          m_DirectAddress(std::move(directAddress))
     {
         // Forward straight to the manager's own signals so ComputerModel's
         // existing listeners pick up the refreshed list / sign-in prompt.
@@ -1079,7 +1086,14 @@ private:
     void run()
     {
         QVector<BrokerWorkstation> workstations;
-        try {
+        if (!m_DirectAddress.isEmpty()) {
+            BrokerWorkstation direct;
+            if (!directWorkstation(&direct)) {
+                return;
+            }
+            workstations.append(direct);
+        }
+        else try {
             workstations = NvHTTP::fetchBrokerWorkstations();
         } catch (const GfeHttpResponseException& error) {
             if (error.getStatusCode() == 401) {
@@ -1158,12 +1172,56 @@ private:
         emit workstationsRefreshed(notifyComputer);
     }
 
+    // Looks the direct workstation up, so it gets its real unique ID (the
+    // same check NvHTTP makes on connect) and a name if none was saved.
+    bool directWorkstation(BrokerWorkstation* out)
+    {
+        NvAddress address;
+        if (!parseManualAddress(m_DirectAddress, address)) {
+            emit refreshFailed(tr("%1 isn't a valid workstation address.").arg(m_DirectAddress));
+            return false;
+        }
+        try {
+            NvHTTP http(address);
+            const QString serverInfo = http.getServerInfo(NvHTTP::NVLL_ERROR);
+            NvComputer probe(http, serverInfo);
+            if (!probe.plankAuthentication || probe.uuid.isEmpty()) {
+                emit refreshFailed(tr("%1 isn't a PLANK workstation.").arg(m_DirectAddress));
+                return false;
+            }
+            out->uniqueId = probe.uuid;
+            out->address = m_DirectAddress;
+            out->displayName = m_DirectName.isEmpty() ? probe.name : m_DirectName;
+            return true;
+        } catch (const QtNetworkReplyException& error) {
+            qWarning() << "Couldn't reach direct workstation" << m_DirectAddress << error.toQString();
+            if (error.getError() == QNetworkReply::SslHandshakeFailedError) {
+                emit refreshFailed(tr("%1 didn't present a trusted PLANK certificate.").arg(m_DirectAddress));
+            } else {
+                emit refreshFailed(tr("Couldn't reach %1. Check the address and that you're on the office network.")
+                                   .arg(m_DirectAddress));
+            }
+        } catch (const GfeHttpResponseException& error) {
+            qWarning() << "Direct workstation" << m_DirectAddress << "refused serverinfo:" << error.toQString();
+            emit refreshFailed(error.toQString());
+        }
+        return false;
+    }
+
     ComputerManager* m_ComputerManager;
+    QString m_DirectName;
+    QString m_DirectAddress;
 };
 
 void ComputerManager::refreshBrokerWorkstations()
 {
     QThreadPool::globalInstance()->start(new BrokerWorkstationRefreshTask(this));
+}
+
+void ComputerManager::showDirectWorkstation(QString name, QString address)
+{
+    QThreadPool::globalInstance()->start(
+                new BrokerWorkstationRefreshTask(this, name.trimmed(), address.trimmed()));
 }
 
 void ComputerManager::rememberPlankReconnectCredentials(

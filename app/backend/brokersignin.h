@@ -24,6 +24,10 @@ class BrokerSignIn : public QObject
     Q_PROPERTY(QVariantList connections READ connections NOTIFY connectionsChanged)
     Q_PROPERTY(int selectedConnection READ selectedConnection NOTIFY selectionChanged)
     Q_PROPERTY(QString connectionName READ connectionName NOTIFY selectionChanged)
+    // "broker" (password, Duo, then the account's workstations) or
+    // "workstation" (one PLANK host on the office network, password only).
+    Q_PROPERTY(QString connectionKind READ connectionKind NOTIFY selectionChanged)
+    Q_PROPERTY(QString connectionAddress READ connectionAddress NOTIFY selectionChanged)
     // "credentials", "signing_in", "mfa", "sending_push", "waiting_push",
     // "checking_passcode" or "signed_in".
     Q_PROPERTY(QString step READ step NOTIFY stepChanged)
@@ -40,6 +44,8 @@ public:
     QVariantList connections() const;
     int selectedConnection() const { return m_Selected; }
     QString connectionName() const;
+    QString connectionKind() const;
+    QString connectionAddress() const;
     QString step() const { return m_Step; }
     QString username() const { return m_Username; }
     QStringList factors() const { return m_Factors; }
@@ -47,8 +53,10 @@ public:
     QString errorText() const { return m_ErrorText; }
     bool rememberUsernameAllowed() const;
 
-    // index -1 adds a connection. Returns an error message, or "" when saved.
-    Q_INVOKABLE QString saveConnection(int index, const QString& name, const QString& address);
+    // index -1 adds a connection. kind is "broker" or "workstation".
+    // Returns an error message, or "" when saved.
+    Q_INVOKABLE QString saveConnection(int index, const QString& name, const QString& address,
+                                       const QString& kind);
     Q_INVOKABLE void removeConnection(int index);
     // Makes this connection the active broker and returns to the password step.
     Q_INVOKABLE void selectConnection(int index);
@@ -73,8 +81,11 @@ signals:
 private:
     struct Saved {
         QString name;
-        QUrl url;
+        QUrl url;          // a broker
+        QString host;      // a workstation: "host" or "host:port"
         QString username;
+        bool workstation() const { return !host.isEmpty(); }
+        QString address() const;
     };
 
     QVector<Saved> load() const;
@@ -85,6 +96,7 @@ private:
     void setStep(const QString& step);
     void fail(const QString& text, const QString& nextStep);
     void finishSignIn(const QJsonObject& reply);
+    void rememberSignedInUsername();
     void forgetPassword();
     void stopWaiting();
 

@@ -23,6 +23,10 @@ constexpr qint64 PushWaitMs = 90000;
 const QString KeyName = QStringLiteral("name");
 const QString KeyUrl = QStringLiteral("url");
 const QString KeyUsername = QStringLiteral("username");
+const QString KeyKind = QStringLiteral("kind");
+const QString KeyHost = QStringLiteral("host");
+const QString KindBroker = QStringLiteral("broker");
+const QString KindWorkstation = QStringLiteral("workstation");
 
 void wipe(QString& value)
 {
@@ -60,15 +64,21 @@ QVector<BrokerSignIn::Saved> BrokerSignIn::load() const
     for (int i = 0; i < count && i < 64; ++i) {
         settings.setArrayIndex(i);
         QString error;
-        const QUrl url = BrokerAddress::normalize(settings.value(KeyUrl).toString(), &error);
-        if (!url.isValid()) {
-            continue;
-        }
         Saved entry;
-        entry.url = url;
+        if (settings.value(KeyKind).toString() == KindWorkstation) {
+            entry.host = BrokerAddress::workstation(settings.value(KeyHost).toString(), &error);
+            if (entry.host.isEmpty()) {
+                continue;
+            }
+        } else {
+            entry.url = BrokerAddress::normalize(settings.value(KeyUrl).toString(), &error);
+            if (!entry.url.isValid()) {
+                continue;
+            }
+        }
         entry.name = settings.value(KeyName).toString().trimmed().left(64);
         if (entry.name.isEmpty()) {
-            entry.name = BrokerAddress::display(url);
+            entry.name = entry.address();
         }
         entry.username = rememberUsernameAllowed() ? settings.value(KeyUsername).toString().left(128) : QString();
         saved.append(entry);
@@ -85,7 +95,12 @@ void BrokerSignIn::store(const QVector<Saved>& saved)
     for (int i = 0; i < saved.size(); ++i) {
         settings.setArrayIndex(i);
         settings.setValue(KeyName, saved[i].name);
-        settings.setValue(KeyUrl, saved[i].url.toString());
+        if (saved[i].workstation()) {
+            settings.setValue(KeyKind, KindWorkstation);
+            settings.setValue(KeyHost, saved[i].host);
+        } else {
+            settings.setValue(KeyUrl, saved[i].url.toString());
+        }
         if (!saved[i].username.isEmpty() && rememberUsernameAllowed()) {
             settings.setValue(KeyUsername, saved[i].username);
         }
@@ -100,10 +115,16 @@ QVariantList BrokerSignIn::connections() const
     for (const Saved& entry : load()) {
         QVariantMap row;
         row.insert(KeyName, entry.name);
-        row.insert(QStringLiteral("address"), BrokerAddress::display(entry.url));
+        row.insert(QStringLiteral("address"), entry.address());
+        row.insert(KeyKind, entry.workstation() ? KindWorkstation : KindBroker);
         list.append(row);
     }
     return list;
+}
+
+QString BrokerSignIn::Saved::address() const
+{
+    return workstation() ? host : BrokerAddress::display(url);
 }
 
 QString BrokerSignIn::connectionName() const
@@ -112,17 +133,41 @@ QString BrokerSignIn::connectionName() const
     return m_Selected >= 0 && m_Selected < saved.size() ? saved[m_Selected].name : QString();
 }
 
+QString BrokerSignIn::connectionKind() const
+{
+    const QVector<Saved> saved = load();
+    return m_Selected >= 0 && m_Selected < saved.size() && saved[m_Selected].workstation()
+            ? KindWorkstation : KindBroker;
+}
+
+QString BrokerSignIn::connectionAddress() const
+{
+    const QVector<Saved> saved = load();
+    return m_Selected >= 0 && m_Selected < saved.size() ? saved[m_Selected].address() : QString();
+}
+
 bool BrokerSignIn::rememberUsernameAllowed() const
 {
     return PlankClientPolicy().rememberUsername();
 }
 
-QString BrokerSignIn::saveConnection(int index, const QString& name, const QString& address)
+QString BrokerSignIn::saveConnection(int index, const QString& name, const QString& address,
+                                     const QString& kind)
 {
     QString error;
-    const QUrl url = BrokerAddress::normalize(address, &error);
-    if (!url.isValid()) {
-        return error;
+    const bool workstation = kind == KindWorkstation;
+    QUrl url;
+    QString host;
+    if (workstation) {
+        host = BrokerAddress::workstation(address, &error);
+        if (host.isEmpty()) {
+            return error;
+        }
+    } else {
+        url = BrokerAddress::normalize(address, &error);
+        if (!url.isValid()) {
+            return error;
+        }
     }
     QVector<Saved> saved = load();
     if (index >= saved.size()) {
@@ -131,15 +176,16 @@ QString BrokerSignIn::saveConnection(int index, const QString& name, const QStri
     Saved entry;
     if (index >= 0) {
         entry = saved[index];
-        if (entry.url != url) {
+        if (entry.url != url || entry.host != host) {
             entry.username.clear();
         }
     }
+    entry.url = url;
+    entry.host = host;
     entry.name = name.trimmed().left(64);
     if (entry.name.isEmpty()) {
-        entry.name = BrokerAddress::display(url);
+        entry.name = entry.address();
     }
-    entry.url = url;
     if (index >= 0) {
         saved[index] = entry;
     } else {
@@ -179,8 +225,14 @@ void BrokerSignIn::selectConnection(int index)
     }
     cancel();
     m_Selected = index;
+    // A workstation connection has no broker: no admission, no Duo.
     const QUrl url = saved[index].url;
     NvHTTP::setActiveBroker(url);
+    if (saved[index].workstation()) {
+        clearError();
+        emit selectionChanged();
+        return;
+    }
     if (BrokerAddress::isLoopbackHost(url.host())) {
         m_Network.setProxy(QNetworkProxy::NoProxy);
     } else {
@@ -320,6 +372,17 @@ void BrokerSignIn::signIn(const QString& username, const QString& password, bool
     m_Username = name;
     m_Password = password;
     m_RememberUsername = rememberUsername && rememberUsernameAllowed();
+    if (connectionKind() == KindWorkstation) {
+        // No broker to ask: the workstation itself checks the password (and
+        // its own PAM policy) when the client signs in to it next.
+        NvHTTP::clearFacilitySignIn();
+        NvHTTP::holdFacilityCredentials(m_Username, m_Password);
+        forgetPassword();
+        rememberSignedInUsername();
+        setStep(QStringLiteral("signed_in"));
+        emit signedIn();
+        return;
+    }
     setStep(QStringLiteral("signing_in"));
     post(QStringLiteral("/auth/ldap"),
          QJsonObject{{QStringLiteral("username"), name}, {QStringLiteral("password"), password}},
@@ -470,7 +533,13 @@ void BrokerSignIn::finishSignIn(const QJsonObject& reply)
     NvHTTP::holdFacilityCredentials(m_Username, m_Password);
     forgetPassword();
     m_MfaId.clear();
+    rememberSignedInUsername();
+    setStep(QStringLiteral("signed_in"));
+    emit signedIn();
+}
 
+void BrokerSignIn::rememberSignedInUsername()
+{
     QVector<Saved> saved = load();
     if (m_Selected >= 0 && m_Selected < saved.size()) {
         const QString remembered = m_RememberUsername ? m_Username : QString();
@@ -479,8 +548,6 @@ void BrokerSignIn::finishSignIn(const QJsonObject& reply)
             store(saved);
         }
     }
-    setStep(QStringLiteral("signed_in"));
-    emit signedIn();
 }
 
 void BrokerSignIn::cancel()

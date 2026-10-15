@@ -32,8 +32,35 @@ static void expectDisplay(const char* input, const char* want)
     }
 }
 
+static void expectWorkstation(const char* input, const char* want)
+{
+    QString error;
+    const QString got = BrokerAddress::workstation(QString::fromUtf8(input), &error);
+    const QString shown = got.isEmpty() ? QStringLiteral("invalid") : got;
+    if (shown != QString::fromUtf8(want)) {
+        std::fprintf(stderr, "workstation(%s) = %s, want %s (%s)\n", input, qPrintable(shown), want,
+                     qPrintable(error));
+        ++failures;
+    }
+    if (got.isEmpty() && error.isEmpty()) {
+        std::fprintf(stderr, "workstation(%s) gave no reason\n", input);
+        ++failures;
+    }
+}
+
 int main()
 {
+    // A workstation reached directly: a name or address, optional port.
+    expectWorkstation("nyc-lfx-003", "nyc-lfx-003");
+    expectWorkstation("  NYC-LFX-003 ", "nyc-lfx-003");
+    expectWorkstation("192.168.76.43", "192.168.76.43");
+    expectWorkstation("192.168.76.43:28989", "192.168.76.43:28989");
+    expectWorkstation("https://192.168.76.43", "invalid");
+    expectWorkstation("nyc-lfx-003/path", "invalid");
+    expectWorkstation("nyc lfx", "invalid");
+    expectWorkstation("", "invalid");
+    expectWorkstation("nyc-lfx-003:70000", "invalid");
+
     // A bare name is a broker on another computer: HTTPS on the default port.
     expect("nyc-plank.example.com", "https://nyc-plank.example.com:8443");
     expect("  NYC-Plank.Example.com/ ", "https://nyc-plank.example.com:8443");
