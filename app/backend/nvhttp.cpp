@@ -2,6 +2,8 @@
 #include "desktopstage.h"
 #include "hostrecovery.h"
 #include "authenticationtakeover.h"
+#include "brokeraddress.h"
+#include <QSettings>
 #include <QCryptographicHash>
 #include <QScopedPointer>
 #include <Limelight.h>
@@ -741,13 +743,39 @@ bool ownerOnlyFile(const QString& path)
     return (permissions & others) == QFile::Permissions() && info.size() <= 80;
 }
 
+// Uppercut: the broker connection and facility session chosen in the
+// sign-in screen. Memory only; the session is never written to disk here.
+QMutex g_brokerLock;
+QUrl g_activeBroker;
+QString g_facilitySession;
+bool g_brokerMode = false;
+// The facility password, kept for one workstation sign-in so the person types
+// it once. Cleared when used, on sign-out, or after FacilityCredentialSeconds.
+QString g_facilityUsername;
+QString g_facilityPassword;
+qint64 g_facilityCredentialsAt = 0;
+constexpr qint64 FacilityCredentialSeconds = 10 * 60;
+
+void wipe(QString& value)
+{
+    value.fill(QChar(0));
+    value.clear();
+}
+
 QUrl configuredBrokerUrl()
 {
+    {
+        QMutexLocker lock(&g_brokerLock);
+        if (g_activeBroker.isValid()) {
+            return g_activeBroker;
+        }
+    }
     const QByteArray configured = qgetenv("PLANK_BROKER_URL");
     if (!configured.isEmpty()) {
-        const QUrl url(QString::fromUtf8(configured));
-        if (!loopbackBroker(url)) {
-            throw GfeHttpResponseException(400, "PLANK broker address must stay on this computer");
+        QString error;
+        const QUrl url = BrokerAddress::normalize(QString::fromUtf8(configured), &error);
+        if (!url.isValid()) {
+            throw GfeHttpResponseException(400, error);
         }
         return url;
     }
@@ -759,6 +787,12 @@ QUrl configuredBrokerUrl()
 
 QString facilityBearer()
 {
+    {
+        QMutexLocker lock(&g_brokerLock);
+        if (g_activeBroker.isValid()) {
+            return g_facilitySession;
+        }
+    }
     const QByteArray configured = qgetenv("PLANK_FACILITY_SESSION");
     if (!configured.isEmpty()) {
         const QString session = QString::fromUtf8(configured).trimmed();
@@ -786,7 +820,7 @@ QString facilityBearer()
 QByteArray postBroker(const QUrl& url, const QByteArray& body, const QString& session, int* status)
 {
     QNetworkAccessManager manager;
-    manager.setProxy(QNetworkProxy::NoProxy);
+    if (loopbackBroker(url)) manager.setProxy(QNetworkProxy::NoProxy);
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Authorization", QByteArray("Bearer ") + session.toUtf8());
@@ -812,7 +846,7 @@ QByteArray postBroker(const QUrl& url, const QByteArray& body, const QString& se
 QByteArray getBroker(const QUrl& url, const QString& session, int* status)
 {
     QNetworkAccessManager manager;
-    manager.setProxy(QNetworkProxy::NoProxy);
+    if (loopbackBroker(url)) manager.setProxy(QNetworkProxy::NoProxy);
     QNetworkRequest request(url);
     request.setRawHeader("Authorization", QByteArray("Bearer ") + session.toUtf8());
     QNetworkReply* reply = manager.get(request);
@@ -932,11 +966,92 @@ void NvHTTP::setAdmissionBundle(const QJsonObject& admission, const QString& wor
 
 bool NvHTTP::brokerConfigured()
 {
+    {
+        QMutexLocker lock(&g_brokerLock);
+        if (g_brokerMode) {
+            return true;
+        }
+    }
     try {
-        return configuredBrokerUrl().isValid();
+        if (configuredBrokerUrl().isValid()) {
+            return true;
+        }
     } catch (const GfeHttpResponseException&) {
         return false;
     }
+    QSettings settings;
+    const int saved = settings.beginReadArray(QStringLiteral(PLANK_BROKER_CONNECTIONS_KEY));
+    settings.endArray();
+    return saved > 0;
+}
+
+void NvHTTP::setActiveBroker(const QUrl& broker)
+{
+    QMutexLocker lock(&g_brokerLock);
+    if (g_activeBroker != broker) {
+        wipe(g_facilitySession);
+    }
+    g_activeBroker = broker;
+    // Once a broker is in use, local bookmarks stay hidden and unsaved for
+    // the rest of this run, so the broker's list never overwrites them.
+    if (broker.isValid()) {
+        g_brokerMode = true;
+    }
+}
+
+QUrl NvHTTP::activeBroker()
+{
+    QMutexLocker lock(&g_brokerLock);
+    return g_activeBroker;
+}
+
+void NvHTTP::setFacilitySession(const QString& session)
+{
+    QMutexLocker lock(&g_brokerLock);
+    wipe(g_facilitySession);
+    g_facilitySession = session;
+}
+
+void NvHTTP::clearFacilitySignIn()
+{
+    QMutexLocker lock(&g_brokerLock);
+    wipe(g_facilitySession);
+    wipe(g_facilityUsername);
+    wipe(g_facilityPassword);
+    g_facilityCredentialsAt = 0;
+}
+
+bool NvHTTP::facilitySignedIn()
+{
+    QMutexLocker lock(&g_brokerLock);
+    return g_activeBroker.isValid() && !g_facilitySession.isEmpty();
+}
+
+void NvHTTP::holdFacilityCredentials(const QString& username, const QString& password)
+{
+    QMutexLocker lock(&g_brokerLock);
+    wipe(g_facilityUsername);
+    wipe(g_facilityPassword);
+    g_facilityUsername = username;
+    g_facilityPassword = password;
+    g_facilityCredentialsAt = QDateTime::currentSecsSinceEpoch();
+}
+
+bool NvHTTP::takeFacilityCredentials(QString* username, QString* password)
+{
+    QMutexLocker lock(&g_brokerLock);
+    const qint64 age = QDateTime::currentSecsSinceEpoch() - g_facilityCredentialsAt;
+    const bool fresh = g_facilityCredentialsAt != 0 && age >= 0 && age <= FacilityCredentialSeconds &&
+            !g_facilityUsername.isEmpty() && !g_facilityPassword.isEmpty();
+    if (fresh) {
+        *username = g_facilityUsername;
+        *password = g_facilityPassword;
+    }
+    // One use either way: a second workstation, or a failed first try, asks.
+    wipe(g_facilityUsername);
+    wipe(g_facilityPassword);
+    g_facilityCredentialsAt = 0;
+    return fresh;
 }
 
 QString NvHTTP::brokerSignInUrl()

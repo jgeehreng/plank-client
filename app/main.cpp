@@ -59,6 +59,7 @@
 #include "gui/computermodel.h"
 #include "backend/computermanager.h"
 #include "backend/nvhttp.h"
+#include "backend/brokersignin.h"
 #include <QSslSocket>
 #include "backend/systemproperties.h"
 #include "streaming/session.h"
@@ -930,6 +931,11 @@ int main(int argc, char *argv[])
                                               [](QQmlEngine* qmlEngine, QJSEngine*) -> QObject* {
                                                   return new ComputerManager(StreamingPreferences::get(qmlEngine));
                                               });
+    qmlRegisterSingletonType<BrokerSignIn>("BrokerSignIn", 1, 0,
+                                           "BrokerSignIn",
+                                           [](QQmlEngine*, QJSEngine*) -> QObject* {
+                                               return new BrokerSignIn();
+                                           });
     qmlRegisterSingletonType<SystemProperties>("SystemProperties", 1, 0,
                                                "SystemProperties",
                                                [](QQmlEngine*, QJSEngine*) -> QObject* {

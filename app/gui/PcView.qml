@@ -45,12 +45,33 @@ CenteredGridView {
         ComputerManager.computerAddCompleted.disconnect(addComplete)
     }
 
+    // Uppercut: the workstation sign-in that reused the facility password.
+    property int facilityAttempt: -1
+
+    function signInToWorkstation(pcIndex)
+    {
+        // One password for the facility and the workstation; ask only if it
+        // isn't available (or didn't work).
+        if (computerModel.authenticateWithFacilitySignIn(pcIndex)) {
+            facilityAttempt = pcIndex
+            return
+        }
+        loginDialog.pcIndex = pcIndex
+        loginDialog.open()
+    }
+
     function authenticationComplete(error, pcIndex)
     {
         authenticationTakeoverDialog.close()
         hostTrustDialog.close()
         loginDialog.close()
-        if (error !== undefined) {
+        var reusedFacilityPassword = facilityAttempt >= 0 && facilityAttempt === pcIndex
+        facilityAttempt = -1
+        if (error !== undefined && reusedFacilityPassword) {
+            loginDialog.pcIndex = pcIndex
+            loginDialog.errorText = error
+            loginDialog.open()
+        } else if (error !== undefined) {
             errorDialog.text = error
             errorDialog.open()
         } else {
@@ -340,12 +361,10 @@ CenteredGridView {
                     launchPlankDesktop(index)
                 }
                 else {
-                    loginDialog.pcIndex = index
-                    loginDialog.open()
+                    signInToWorkstation(index)
                 }
-            } else if (plankBrokerConfigured) {
-                loginDialog.pcIndex = index
-                loginDialog.open()
+            } else if (model.brokerManaged) {
+                signInToWorkstation(index)
             } else {
                 // Using open() here because it may be activated by keyboard
                 pcContextMenu.open()
@@ -407,6 +426,7 @@ CenteredGridView {
     NavigableDialog {
         id: loginDialog
         property int pcIndex: -1
+        property string errorText: ""
         title: qsTr("Sign in to workstation")
         modal: true
         closePolicy: Popup.CloseOnEscape
@@ -423,6 +443,7 @@ CenteredGridView {
         onClosed: {
             usernameField.clear()
             passwordField.clear()
+            errorText = ""
         }
         onAccepted: {
             if (usernameField.text && passwordField.text) {
@@ -436,6 +457,13 @@ CenteredGridView {
 
             Label {
                 text: qsTr("Use your workstation operating-system account.")
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+            Label {
+                visible: loginDialog.errorText.length > 0
+                text: loginDialog.errorText
+                color: theme.danger
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }

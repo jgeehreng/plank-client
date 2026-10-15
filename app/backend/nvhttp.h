@@ -17,6 +17,9 @@
 
 class NvComputer;
 
+// Uppercut: QSettings array holding saved broker connections.
+#define PLANK_BROKER_CONNECTIONS_KEY "plank-broker-connections"
+
 // One row from the broker's GET /workstations response: the workstations
 // the signed-in subject is allowed to access.
 struct BrokerWorkstation
@@ -212,6 +215,20 @@ public:
     static void setAdmissionBundle(const QJsonObject& admission, const QString& workstationUniqueId,
                                    const QString& certificateSha256 = QString());
     static bool brokerConfigured();
+    // Uppercut: the broker connection chosen in the sign-in screen, and the
+    // facility session it opened. Memory only. Changing the broker forgets
+    // the session.
+    static void setActiveBroker(const QUrl& broker);
+    static QUrl activeBroker();
+    static void setFacilitySession(const QString& session);
+    static bool facilitySignedIn();
+    // Forget the facility session and any held password.
+    static void clearFacilitySignIn();
+    // The facility username and password, held so the workstation sign-in
+    // can reuse them once. take returns them at most once, within ten
+    // minutes of sign-in, and forgets them either way.
+    static void holdFacilityCredentials(const QString& username, const QString& password);
+    static bool takeFacilityCredentials(QString* username, QString* password);
     // Throws GfeHttpResponseException(401, ...) if the facility session is
     // missing or the broker has expired it.
     static QVector<BrokerWorkstation> fetchBrokerWorkstations();

@@ -225,6 +225,7 @@ SOURCES += \
     backend/computerseeker.cpp \
     backend/nvcomputer.cpp \
     backend/nvhttp.cpp \
+    backend/brokersignin.cpp \
     backend/hosttruststore.cpp \
     backend/hosttlsguard.cpp \
     backend/computermanager.cpp \
@@ -268,6 +269,8 @@ HEADERS += \
     backend/nvcomputer.h \
     backend/planknetwork.h \
     backend/nvhttp.h \
+    backend/brokeraddress.h \
+    backend/brokersignin.h \
     backend/brokerheartbeatpolicy.h \
     backend/hosttruststore.h \
     backend/hosttlsguard.h \

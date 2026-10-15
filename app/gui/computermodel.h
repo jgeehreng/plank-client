@@ -37,6 +37,10 @@ public:
     Q_INVOKABLE void deleteComputer(int computerIndex);
 
     Q_INVOKABLE void authenticateComputer(int computerIndex, QString username, QString password);
+    // Uppercut: sign in to a broker workstation with the facility password the
+    // person just entered, so they type it once. Returns false (and does
+    // nothing) when there is none to use; the caller then asks for it.
+    Q_INVOKABLE bool authenticateWithFacilitySignIn(int computerIndex);
     Q_INVOKABLE QString rememberedUsername(int computerIndex) const;
     Q_INVOKABLE void respondToAuthenticationTakeover(bool accepted);
     Q_INVOKABLE void respondToHostTrust(bool accepted);

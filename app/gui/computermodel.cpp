@@ -1,5 +1,6 @@
 #include "computermodel.h"
 #include "backend/relaywakeclient.h"
+#include "backend/nvhttp.h"
 #include "settings/plankclientpolicy.h"
 
 #include <utility>
@@ -363,6 +364,21 @@ void ComputerModel::authenticateComputer(int computerIndex, QString username,
     m_AuthenticatingComputer = m_Computers[computerIndex];
     m_ComputerManager->authenticateHost(m_Computers[computerIndex],
                                         std::move(username), std::move(password), true);
+}
+
+bool ComputerModel::authenticateWithFacilitySignIn(int computerIndex)
+{
+    if (computerIndex < 0 || computerIndex >= m_Computers.count() || m_AuthenticatingComputer ||
+            !m_Computers[computerIndex]->brokerManaged) {
+        return false;
+    }
+    QString username;
+    QString password;
+    if (!NvHTTP::takeFacilityCredentials(&username, &password)) {
+        return false;
+    }
+    authenticateComputer(computerIndex, std::move(username), std::move(password));
+    return true;
 }
 
 void ComputerModel::handleAuthenticationCompleted(NvComputer* computer, QString error)

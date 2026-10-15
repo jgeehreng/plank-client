@@ -259,8 +259,28 @@ ApplicationWindow {
             }
 
             NavigableToolButton {
+                id: facilitySignInButton
+                // Uppercut: bookmarks mode only; with a broker the sign-in
+                // screen is already underneath the workstation list.
+                visible: qmltypeof(stackView.currentItem, "PcView") && stackView.depth === 1
+
+                iconSource: "qrc:/res/baseline-lock-24px.svg"
+
+                ToolTip.delay: 1000
+                ToolTip.timeout: 3000
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Sign in to a facility")
+
+                onClicked: stackView.push("qrc:/gui/FacilitySignInView.qml")
+
+                Keys.onDownPressed: {
+                    stackView.currentItem.forceActiveFocus(Qt.TabFocus)
+                }
+            }
+
+            NavigableToolButton {
                 id: addPcButton
-                visible: qmltypeof(stackView.currentItem, "PcView")
+                visible: qmltypeof(stackView.currentItem, "PcView") && stackView.depth === 1
 
                 iconSource:  "qrc:/res/ic_add_to_queue_white_48px.svg"
 
