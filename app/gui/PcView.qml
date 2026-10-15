@@ -314,10 +314,11 @@ CenteredGridView {
                 }
                 NavigableMenuItem {
                     parentMenu: pcContextMenu
-                    text: qsTr("Edit bookmark…")
-                    visible: model.manualBookmark && !model.brokerManaged
+                    text: model.brokerManaged ? qsTr("Workstation settings…") : qsTr("Edit bookmark…")
+                    visible: model.manualBookmark || model.brokerManaged
                     onTriggered: {
                         editBookmarkDialog.pcIndex = index
+                        editBookmarkDialog.brokerManaged = model.brokerManaged
                         editBookmarkDialog.originalAddress = model.address
                         editBookmarkDialog.originalNickname = model.name
                         editBookmarkDialog.scalingIndex =
@@ -500,6 +501,9 @@ CenteredGridView {
     NavigableDialog {
         id: editBookmarkDialog
         property int pcIndex: -1
+        // Uppercut: the broker owns a facility workstation's address and
+        // name; only its display and encoding settings are edited here.
+        property bool brokerManaged: false
         property string originalAddress: ""
         property string originalNickname: ""
         property int scalingIndex: 1
@@ -512,7 +516,7 @@ CenteredGridView {
         property int originalCaptureSource: StreamingPreferences.PLANK_CAPTURE_NVFBC_8BIT
         property var originalProfileBitratesKbps: []
         property var profileBitratesKbps: []
-        title: qsTr("Edit workstation bookmark")
+        title: brokerManaged ? qsTr("Workstation settings") : qsTr("Edit workstation bookmark")
         width: Math.min(640, parent.width - 40)
         height: Math.min(implicitHeight, parent.height - 20)
         dim: false
@@ -635,6 +639,8 @@ CenteredGridView {
             PlankTextField {
                 id: editAddressText
                 Layout.fillWidth: true
+                readOnly: editBookmarkDialog.brokerManaged
+                opacity: readOnly ? 0.6 : 1
             }
 
             Label {
@@ -644,6 +650,8 @@ CenteredGridView {
             PlankTextField {
                 id: editNicknameText
                 Layout.fillWidth: true
+                readOnly: editBookmarkDialog.brokerManaged
+                opacity: readOnly ? 0.6 : 1
             }
 
             Label {

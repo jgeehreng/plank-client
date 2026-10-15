@@ -1,4 +1,5 @@
 #include "computermanager.h"
+#include <QSettings>
 #include "nvhttp.h"
 #include "settings/plankclientpolicy.h"
 
@@ -980,6 +981,77 @@ void ComputerManager::authenticateHost(NvComputer* computer, QString username,
     QThreadPool::globalInstance()->start(authentication);
 }
 
+// Uppercut: display and encoding settings for facility workstations. The
+// broker rebuilds that list at every sign-in, so these are kept per
+// workstation id, apart from local bookmarks.
+namespace {
+const char* const BrokerWorkstationSettingsGroup = "plank-broker-workstations";
+}
+
+static void saveBrokerWorkstationSettings(NvComputer* computer)
+{
+    QReadLocker lock(&computer->lock);
+    if (!computer->brokerManaged || computer->uuid.isEmpty()) {
+        return;
+    }
+    QSettings settings;
+    settings.beginGroup(QString::fromLatin1(BrokerWorkstationSettingsGroup));
+    settings.beginGroup(computer->uuid);
+    settings.setValue(QStringLiteral("scaling"), computer->plankScalingMode);
+    settings.setValue(QStringLiteral("host-layout"), computer->plankHostLayout);
+    settings.setValue(QStringLiteral("virtual-mode-1"), computer->plankVirtualMode1);
+    settings.setValue(QStringLiteral("virtual-mode-2"), computer->plankVirtualMode2);
+    settings.setValue(QStringLiteral("video-profile"), computer->plankVideoProfile);
+    settings.setValue(QStringLiteral("capture-source"), computer->plankCaptureSource);
+    QVariantList bitrates;
+    for (int kbps : computer->plankProfileBitratesKbps) {
+        bitrates.append(kbps);
+    }
+    settings.setValue(QStringLiteral("bitrates-kbps"), bitrates);
+    settings.endGroup();
+    settings.endGroup();
+}
+
+static void loadBrokerWorkstationSettings(NvComputer* computer)
+{
+    QSettings settings;
+    settings.beginGroup(QString::fromLatin1(BrokerWorkstationSettingsGroup));
+    if (!settings.childGroups().contains(computer->uuid)) {
+        return;
+    }
+    settings.beginGroup(computer->uuid);
+    const QString scaling = settings.value(QStringLiteral("scaling")).toString();
+    const QString hostLayout = settings.value(QStringLiteral("host-layout")).toString();
+    const QString mode1 = settings.value(QStringLiteral("virtual-mode-1")).toString();
+    const QString mode2 = settings.value(QStringLiteral("virtual-mode-2")).toString();
+    const int profile = settings.value(QStringLiteral("video-profile"), -1).toInt();
+    const int capture = settings.value(QStringLiteral("capture-source"), -1).toInt();
+    QVector<int> bitrates;
+    for (const QVariant& value : settings.value(QStringLiteral("bitrates-kbps")).toList()) {
+        bitrates.append(value.toInt());
+    }
+    settings.endGroup();
+    settings.endGroup();
+    NvAddress address;
+    QString name;
+    {
+        QReadLocker lock(&computer->lock);
+        address = computer->manualAddress;
+        name = computer->name;
+    }
+    // Stored values are checked again; anything stale keeps the defaults.
+    if (!NvOutputTopology::qualifiedVirtualModes().contains(mode1) ||
+            !NvOutputTopology::qualifiedVirtualModes().contains(mode2) ||
+            !StreamingPreferences::isPlankProfileValidForCaptureSource(profile, capture) ||
+            bitrates.size() != StreamingPreferences::PLANK_PROFILE_COUNT ||
+            (scaling != NvOutputTopology::NativeScalingMode && scaling != NvOutputTopology::ScaledSpanMode) ||
+            hostLayout.isEmpty()) {
+        return;
+    }
+    computer->updateManualBookmark(address, name, scaling, hostLayout, mode1, mode2,
+                                   profile, capture, bitrates);
+}
+
 class BrokerWorkstationRefreshTask : public QObject, public QRunnable
 {
     Q_OBJECT
@@ -1042,6 +1114,7 @@ private:
             computer->uuid = workstation.uniqueId;
             computer->serverUuid = workstation.uniqueId;
             computer->brokerManaged = true;
+            loadBrokerWorkstationSettings(computer);
             freshHosts[computer->uuid] = computer;
         }
 
@@ -1316,12 +1389,21 @@ bool ComputerManager::editManualBookmark(NvComputer* computer, QString address,
     }
 
     bool addressChanged;
+    bool brokerManaged;
     {
         QReadLocker computerLock(&computer->lock);
         if (!computer->manualBookmark) {
             return false;
         }
         addressChanged = computer->manualAddress != manualAddress;
+        brokerManaged = computer->brokerManaged;
+        if (brokerManaged) {
+            // The broker owns a facility workstation's address and name.
+            if (addressChanged) {
+                return false;
+            }
+            nickname = computer->name;
+        }
     }
 
     QString oldUuid;
@@ -1370,6 +1452,9 @@ bool ComputerManager::editManualBookmark(NvComputer* computer, QString address,
                                        virtualMode1, virtualMode2, videoProfile,
                                        captureSource,
                                        profileBitratesKbps);
+        if (brokerManaged) {
+            saveBrokerWorkstationSettings(computer);
+        }
     }
 
     handleComputerStateChanged(computer);
