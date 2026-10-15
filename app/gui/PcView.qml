@@ -13,6 +13,9 @@ CenteredGridView {
 
     id: pcGrid
 
+    // Uppercut: this list came from a facility sign-in (pushed above it).
+    readonly property bool facilityList: StackView.index > 0
+
     PlankTheme {
         id: theme
     }
@@ -139,13 +142,14 @@ CenteredGridView {
 
         BusyIndicator {
             id: searchSpinner
-            visible: StreamingPreferences.enableMdns
+            visible: StreamingPreferences.enableMdns && !pcGrid.facilityList
         }
 
         Label {
             height: searchSpinner.height
             elide: Label.ElideRight
-            text: StreamingPreferences.enableMdns ? qsTr("Searching for compatible hosts on your local network...")
+            text: pcGrid.facilityList ? qsTr("No workstations are assigned to your account. Ask IT for access.") :
+                  StreamingPreferences.enableMdns ? qsTr("Searching for compatible hosts on your local network...")
                                                   : qsTr("Automatic PC discovery is disabled. Add your PC manually.")
             color: theme.textSecondary
             font.pointSize: 15

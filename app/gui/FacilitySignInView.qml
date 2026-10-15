@@ -6,7 +6,7 @@ import BrokerSignIn 1.0
 import ComputerManager 1.0
 
 // Uppercut: facility sign-in in the PCoIP client's shape. Saved connections,
-// then username and password, then Duo (Send Me a Push or a passcode), then
+// then username and password, then Duo (Send Me a Push), then
 // the workstations this account may use.
 Item {
     id: signInView
@@ -81,12 +81,6 @@ Item {
         passwordField.text = ""
     }
 
-    function submitPasscode() {
-        if (passcodeField.text.length === 0)
-            return
-        BrokerSignIn.submitPasscode(passcodeField.text)
-        passcodeField.text = ""
-    }
 
     function handleSignedIn() {
         listError = ""
@@ -148,8 +142,8 @@ Item {
     Connections {
         target: BrokerSignIn
         function onStepChanged() {
-            if (BrokerSignIn.step === "mfa" && BrokerSignIn.factors.indexOf("passcode") >= 0)
-                passcodeField.forceActiveFocus()
+            if (BrokerSignIn.step === "mfa" && BrokerSignIn.factors.indexOf("push") >= 0)
+                pushButton.forceActiveFocus()
         }
     }
 
@@ -164,8 +158,10 @@ Item {
         // Left: what this step is, and which connection it is for.
         ColumnLayout {
             Layout.fillHeight: true
-            Layout.preferredWidth: parent.width * 0.4
-            Layout.minimumWidth: 220
+            // A child with fillWidth would otherwise make this column fill
+            // too and squeeze the form off the right edge.
+            Layout.fillWidth: false
+            Layout.preferredWidth: Math.max(220, Math.min(420, parent.width * 0.4))
             spacing: theme.spaceLarge
 
             Label {
@@ -242,6 +238,7 @@ Item {
         Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            Layout.minimumWidth: 300
 
             // ---- Saved connections ----
             ColumnLayout {
@@ -416,47 +413,31 @@ Item {
                 }
             }
 
-            // ---- Duo: passcode or Send Me a Push ----
+            // ---- Duo: Send Me a Push ----
             ColumnLayout {
                 visible: signInView.page === "signin" && signInView.mfaStep
                 width: Math.min(parent.width, 420)
                 spacing: theme.spaceSmall
 
-                ColumnLayout {
-                    visible: BrokerSignIn.factors.indexOf("passcode") >= 0
-                    spacing: theme.spaceSmall
+                Label {
+                    text: qsTr("Approve the sign-in with Duo on your phone or watch.")
+                    color: theme.textSecondary
+                    wrapMode: Text.Wrap
+                    visible: BrokerSignIn.factors.indexOf("push") >= 0 && BrokerSignIn.step !== "waiting_push"
                     Layout.fillWidth: true
-
-                    Label { text: qsTr("Passcode"); color: theme.textSecondary }
-                    PlankTextField {
-                        id: passcodeField
-                        placeholderText: qsTr("Passcode")
-                        enabled: !signInView.busy
-                        inputMethodHints: Qt.ImhDigitsOnly
-                        Layout.fillWidth: true
-                        Keys.onReturnPressed: signInView.submitPasscode()
-                        Keys.onEnterPressed: signInView.submitPasscode()
-                    }
-                    Button {
-                        text: BrokerSignIn.step === "checking_passcode" ? qsTr("Checking…") : qsTr("Submit Passcode")
-                        enabled: !signInView.busy && passcodeField.text.length > 0
-                        Layout.fillWidth: true
-                        Layout.topMargin: theme.spaceSmall
-                        onClicked: signInView.submitPasscode()
-                    }
+                    Layout.bottomMargin: theme.spaceMedium
                 }
 
-                RowLayout {
-                    visible: BrokerSignIn.factors.indexOf("passcode") >= 0 && BrokerSignIn.factors.indexOf("push") >= 0
+                Label {
+                    text: qsTr("Your Duo account has no device that can receive a push. Ask IT to add Duo Mobile to your account.")
+                    color: theme.danger
+                    wrapMode: Text.Wrap
+                    visible: BrokerSignIn.factors.indexOf("push") < 0
                     Layout.fillWidth: true
-                    Layout.topMargin: theme.spaceMedium
-                    Layout.bottomMargin: theme.spaceMedium
-                    Rectangle { implicitHeight: 1; color: theme.border; Layout.fillWidth: true }
-                    Label { text: qsTr("or"); color: theme.textSecondary }
-                    Rectangle { implicitHeight: 1; color: theme.border; Layout.fillWidth: true }
                 }
 
                 Button {
+                    id: pushButton
                     visible: BrokerSignIn.factors.indexOf("push") >= 0 && BrokerSignIn.step !== "waiting_push"
                     text: BrokerSignIn.step === "sending_push" ? qsTr("Sending…") : qsTr("Send Me a Push")
                     highlighted: true
