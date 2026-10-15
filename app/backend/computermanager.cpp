@@ -1119,12 +1119,20 @@ private:
         }
 
         QVector<NvComputer*> staleComputers;
+        QVector<ComputerPollingEntry*> staleEntries;
         NvComputer* notifyComputer = nullptr;
         {
             QWriteLocker lock(&m_ComputerManager->m_Lock);
 
+            // Detach the old entries' pollers before polling the fresh ones.
+            // A workstation that is still granted keeps its uuid, so reusing
+            // its old polling entry would keep checking the old (soon freed)
+            // computer, and the fresh one would stay "Checking" forever.
             for (NvComputer* existing : std::as_const(m_ComputerManager->m_KnownHosts)) {
                 staleComputers.append(existing);
+                if (ComputerPollingEntry* entry = m_ComputerManager->m_PollEntries.take(existing->uuid)) {
+                    staleEntries.append(entry);
+                }
             }
             m_ComputerManager->m_KnownHosts.clear();
 
@@ -1135,14 +1143,12 @@ private:
             }
         }
 
-        // Stop and free polling for workstations the subject can no longer access.
-        for (NvComputer* stale : std::as_const(staleComputers)) {
-            ComputerPollingEntry* entry;
-            {
-                QWriteLocker lock(&m_ComputerManager->m_Lock);
-                entry = m_ComputerManager->m_PollEntries.take(stale->uuid);
-            }
+        // Stop the old pollers outside the lock (stopping waits for the
+        // thread), then free the old computers.
+        for (ComputerPollingEntry* entry : std::as_const(staleEntries)) {
             delete entry;
+        }
+        for (NvComputer* stale : std::as_const(staleComputers)) {
             delete stale;
         }
 
