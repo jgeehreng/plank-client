@@ -227,6 +227,7 @@ void BrokerSignIn::selectConnection(int index)
     m_Selected = index;
     // A workstation connection has no broker: no admission, no Duo.
     const QUrl url = saved[index].url;
+    NvHTTP::setDirectConnection(saved[index].workstation());
     NvHTTP::setActiveBroker(url);
     if (saved[index].workstation()) {
         clearError();

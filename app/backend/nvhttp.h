@@ -215,6 +215,9 @@ public:
     static void setAdmissionBundle(const QJsonObject& admission, const QString& workstationUniqueId,
                                    const QString& certificateSha256 = QString());
     static bool brokerConfigured();
+    // Uppercut: a "Workstation" saved connection is selected, so nothing may
+    // go through a broker (not even an environment or session-file broker).
+    static void setDirectConnection(bool direct);
     // Uppercut: the broker connection chosen in the sign-in screen, and the
     // facility session it opened. Memory only. Changing the broker forgets
     // the session.

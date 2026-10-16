@@ -749,6 +749,9 @@ QMutex g_brokerLock;
 QUrl g_activeBroker;
 QString g_facilitySession;
 bool g_brokerMode = false;
+// A "Workstation" saved connection is in use: no broker at all, including
+// the older PLANK_BROKER_URL / session-file setups below.
+bool g_directConnection = false;
 // The facility password, kept for one workstation sign-in so the person types
 // it once. Cleared when used, on sign-out, or after FacilityCredentialSeconds.
 QString g_facilityUsername;
@@ -766,6 +769,9 @@ QUrl configuredBrokerUrl()
 {
     {
         QMutexLocker lock(&g_brokerLock);
+        if (g_directConnection) {
+            return QUrl();
+        }
         if (g_activeBroker.isValid()) {
             return g_activeBroker;
         }
@@ -789,6 +795,9 @@ QString facilityBearer()
 {
     {
         QMutexLocker lock(&g_brokerLock);
+        if (g_directConnection) {
+            return QString();
+        }
         if (g_activeBroker.isValid()) {
             return g_facilitySession;
         }
@@ -995,6 +1004,17 @@ void NvHTTP::setActiveBroker(const QUrl& broker)
     // Once a broker is in use, local bookmarks stay hidden and unsaved for
     // the rest of this run, so the broker's list never overwrites them.
     if (broker.isValid()) {
+        g_brokerMode = true;
+    }
+}
+
+void NvHTTP::setDirectConnection(bool direct)
+{
+    QMutexLocker lock(&g_brokerLock);
+    g_directConnection = direct;
+    if (direct) {
+        wipe(g_facilitySession);
+        g_activeBroker = QUrl();
         g_brokerMode = true;
     }
 }
