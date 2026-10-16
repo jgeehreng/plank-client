@@ -996,7 +996,7 @@ static void saveBrokerWorkstationSettings(NvComputer* computer)
     }
     QSettings settings;
     settings.beginGroup(QString::fromLatin1(BrokerWorkstationSettingsGroup));
-    settings.beginGroup(computer->uuid);
+    settings.beginGroup(computer->uuid.toLower());
     settings.setValue(QStringLiteral("scaling"), computer->plankScalingMode);
     settings.setValue(QStringLiteral("host-layout"), computer->plankHostLayout);
     settings.setValue(QStringLiteral("virtual-mode-1"), computer->plankVirtualMode1);
@@ -1016,10 +1016,10 @@ static void loadBrokerWorkstationSettings(NvComputer* computer)
 {
     QSettings settings;
     settings.beginGroup(QString::fromLatin1(BrokerWorkstationSettingsGroup));
-    if (!settings.childGroups().contains(computer->uuid)) {
+    if (!settings.childGroups().contains(computer->uuid.toLower())) {
         return;
     }
-    settings.beginGroup(computer->uuid);
+    settings.beginGroup(computer->uuid.toLower());
     const QString scaling = settings.value(QStringLiteral("scaling")).toString();
     const QString hostLayout = settings.value(QStringLiteral("host-layout")).toString();
     const QString mode1 = settings.value(QStringLiteral("virtual-mode-1")).toString();
@@ -1183,7 +1183,17 @@ private:
         }
         try {
             NvHTTP http(address);
-            const QString serverInfo = http.getServerInfo(NvHTTP::NVLL_ERROR);
+            QString serverInfo;
+            try {
+                serverInfo = http.getServerInfo(NvHTTP::NVLL_ERROR);
+            } catch (const QtNetworkReplyException& first) {
+                // The first contact from a new build can fail while macOS
+                // asks for Local Network access; try once more.
+                if (first.getError() == QNetworkReply::SslHandshakeFailedError) throw;
+                qInfo() << "Retrying direct workstation" << m_DirectAddress << "after" << first.toQString();
+                QThread::sleep(3);
+                serverInfo = http.getServerInfo(NvHTTP::NVLL_ERROR);
+            }
             NvComputer probe(http, serverInfo);
             if (!probe.plankAuthentication || probe.uuid.isEmpty()) {
                 emit refreshFailed(tr("%1 isn't a PLANK workstation.").arg(m_DirectAddress));
